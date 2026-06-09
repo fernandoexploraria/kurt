@@ -1,0 +1,35 @@
+services:
+  gateway:
+    build: .
+    container_name: openclaw-gateway
+    restart: unless-stopped
+    ports:
+      - "18789:18789"
+    environment:
+      - TZ=${TZ}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_ALLOWED_USERS=${TELEGRAM_ALLOWED_USERS}
+      - TELEGRAM_ALLOWED_USER_1=${TELEGRAM_ALLOWED_USER_1}
+      - GOG_KEYRING_PASSWORD=${GOG_KEYRING_PASSWORD}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - GEMINI_API_KEY=${GOOGLE_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - GOOGLE_PLACES_API_KEY=${GOOGLE_PLACES_API_KEY}
+      - QUIVER_API_KEY=${QUIVER_API_KEY}
+      - RAPIDAPI_KEY=${RAPIDAPI_KEY}
+      - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
+      - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
+      - SPOTIFY_REFRESH_TOKEN=${SPOTIFY_REFRESH_TOKEN}
+      - SCHWAB_APP_KEY=${SCHWAB_APP_KEY}
+      - SCHWAB_APP_SECRET=${SCHWAB_APP_SECRET}
+      - GOG_ACCOUNT=${GOG_ACCOUNT}
+      - SEARCH_PROVIDER=tavily
+      - OPENCLAW_GATEWAY_BIND=lan
+      - NODE_OPTIONS=${NODE_OPTIONS}
+      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
+    volumes:
+      - ./workspace:/root/.openclaw/workspace
+      - ./data:/root/.openclaw
+      - ./gog-config:/root/.config/gogcli
+      - ./workspace/gog:/usr/local/bin/gog
+      - ./workspace/gog:/usr/local/bin/gogcli

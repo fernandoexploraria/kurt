@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "skills": {
+    "gog": {
+      "version": "1.0.0",
+      "installedAt": 1778356156515
+    },
+    "quiver": {
+      "version": "1.0.1",
+      "installedAt": 1778532195833
+    },
+    "tradingview-quantitative-skills": {
+      "version": "1.0.4",
+      "installedAt": 1778532201772
+    },
+    "web-search-pro": {
+      "version": "2.1.4",
+      "installedAt": 1778532210195
+    }
+  }
+}

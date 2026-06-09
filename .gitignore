@@ -1,0 +1,39 @@
+# Ignore State & Memory (Critical!)
+memory/
+TOOLS.md
+.env
+.dreams/
+
+# Ignore Python Artifacts & Virtual Environments
+__pycache__/
+*.pyc
+quant_env/
+venv/
+node_modules/
+
+# Ignore Local Logs
+*.log
+credentials.json
+data/
+gog-config/
+workspace/credentials/
+
+# ==========================================
+# --- NEW: Workspace Root Cleanup Only ---
+# ==========================================
+# (Targets files directly in workspace/, doesn't touch subfolders)
+
+# Ignore mass data dumps and scratch text
+workspace/*.json
+workspace/*.txt
+workspace/*.log
+workspace/*.pdf
+workspace/*.xlsx
+
+# Ignore heavy local binary executables
+workspace/gog
+workspace/get-pip.py
+
+# Ignore loose scratchpad scripts at the root level 
+# (Your files in workspace/scripts/ and workspace/skills/ remain 100% safe!)
+workspace/*.py
