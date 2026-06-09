@@ -109,6 +109,7 @@ def main():
                 highest = avg_cost
                 current_floor = round(avg_cost * 0.92, 2)  # Strict max -8% loss
                 drop_amount = round(highest - current_floor, 2)
+                multiplier = "N/A"
             else:
                 # Standard profit-protecting ATR buffer
                 multiplier = optimized_multipliers.get(ticker, DEFAULT_ATR_MULTIPLIER)

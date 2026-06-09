@@ -5,6 +5,8 @@ from datetime import datetime
 import time
 import requests
 
+SHIELD_FILE = "/root/.openclaw/workspace/memory/quiver_shield.json"
+
 # --- CONFIGURATION ---
 TEST_SHEET_ID = "1kjzfc6uEzBFtmNjlU1x3TVbHuWPgY7jnNce8mNTe66I"
 ACCOUNT = "fernando@exploraria.ai"
@@ -16,6 +18,14 @@ def load_cache():
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, 'r') as f:
+                return json.load(f)
+        except: pass
+    return {}
+
+def load_shield():
+    if os.path.exists(SHIELD_FILE):
+        try:
+            with open(SHIELD_FILE, 'r') as f:
                 return json.load(f)
         except: pass
     return {}
@@ -129,32 +139,22 @@ def get_ta_ceiling(ticker, cache):
         time.sleep(0.3)
     return None
 
-def get_quiver_adjustments(ticker):
+def get_quiver_adjustments(ticker, shield_cache):
     modifier = 1.0 
-    dpi_cmd = f"/root/.openclaw/workspace/quant_env/bin/python3 /root/.openclaw/workspace/skills/quiver-alpha/scripts/fetch.py darkpool {ticker}"
-    dpi_out = run_subprocess(dpi_cmd)
-    if dpi_out:
-        try:
-            dpi_data = json.loads(dpi_out)
-            if dpi_data and len(dpi_data) > 0:
-                latest_dpi = dpi_data[0].get("DPI", 0.5)
-                if latest_dpi > 0.50:
-                    reduction = (latest_dpi - 0.50) * 0.2
-                    modifier -= min(reduction, 0.05)
-        except: pass
+    shield_data = shield_cache.get(ticker, {})
+    
+    # 1. Dark Pool Index (DPI) Adjustments
+    latest_dpi = shield_data.get("dpi", 0.5)
+    if latest_dpi > 0.50:
+        reduction = (latest_dpi - 0.50) * 0.2
+        modifier -= min(reduction, 0.05)
 
-    congress_cmd = f"/root/.openclaw/workspace/quant_env/bin/python3 /root/.openclaw/workspace/skills/quiver/scripts/query_quiver.py congress --ticker {ticker}"
-    congress_out = run_subprocess(congress_cmd)
-    if congress_out:
-        try:
-            sales = congress_out.count('"Transaction":"Sale"')
-            purchases = congress_out.count('"Transaction":"Purchase"')
-            net_buys = purchases - sales
-            if net_buys > 0:
-                boost = net_buys * 0.01
-                modifier += min(boost, 0.10)
-        except: pass
-
+    # 2. Congressional Conviction Score Adjustments
+    score = shield_data.get("score", 50)
+    if score != 50:
+        boost = (score - 50) * 0.002
+        modifier += boost
+        
     return modifier
 
 def update_sheet(row, target_price, floor_price, atr_val):
@@ -168,6 +168,7 @@ def update_sheet(row, target_price, floor_price, atr_val):
 def main():
     print("Starting UNIFIED V2.1 Target Calibration (Dynamic ATR, Ceilings, and Ratchet Floors)...")
     cache = load_cache()
+    shield_cache = load_shield()
     
     # Load Optimized Multipliers
     optimized_file = "/root/.openclaw/workspace/memory/optimized_multipliers.json"
@@ -204,7 +205,7 @@ def main():
             print("  [!] No Analyst/TA Ceiling. Using 3x ATR Fallback.")
             base_ceiling = current_price + (3 * atr)
             
-        modifier = get_quiver_adjustments(ticker)
+        modifier = get_quiver_adjustments(ticker, shield_cache)
         print(f"  [+] Scaled Quiver Modifier: {modifier:.3f}")
         
         target_price = round(base_ceiling * modifier, 2)
