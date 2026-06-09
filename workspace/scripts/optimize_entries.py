@@ -159,13 +159,34 @@ def main():
             best_win_rate = 0.0
             best_trades = 0
 
+            # Walk-Forward Validation (66% Train / 34% Validate)
+            split_idx = int(len(df) * 0.66)
+            df_train = df.iloc[:split_idx]
+            df_val = df.iloc[split_idx:]
+
+            candidates = []
             for strat in strategies:
-                ret, win_rate, trades = backtest_strategy(df, m, strat)
-                if ret > best_return and trades > 0:
-                    best_return = ret
-                    best_strat = strat
-                    best_win_rate = win_rate
-                    best_trades = trades
+                t_ret, t_win, t_trades = backtest_strategy(df_train, m, strat)
+                if t_trades > 0:
+                    candidates.append({"strat": strat, "train_ret": t_ret})
+
+            candidates.sort(key=lambda x: x["train_ret"], reverse=True)
+            
+            robust_strat = None
+            for cand in candidates:
+                v_ret, v_win, v_trades = backtest_strategy(df_val, m, cand["strat"])
+                if v_ret > 0:  # Must survive validation out-of-sample
+                    robust_strat = cand["strat"]
+                    break
+                    
+            if robust_strat:
+                best_strat = robust_strat
+            else:
+                # If nothing survived validation, fall back to safe default
+                best_strat = "None"
+
+            if best_strat != "None":
+                best_return, best_win_rate, best_trades = backtest_strategy(df, m, best_strat)
 
             optimized_results[ticker] = {
                 "best_trigger": best_strat,
