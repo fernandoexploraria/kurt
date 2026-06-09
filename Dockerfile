@@ -1,6 +1,6 @@
 FROM ghcr.io/openclaw/openclaw:2026.5.20
 
-# Switch to root to install system packages
+#  Switch to root to install system packages
 USER root
 
 # Install Python and Pip (handles both Debian and Alpine based images)
