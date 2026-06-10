@@ -199,45 +199,72 @@ def get_quiver_adjustments(ticker, shield_cache):
     return modifier
 
 def get_correlation_multiplier(candidate, active_positions):
-    """Calculates the continuous decay correlation multiplier against currently active positions."""
+    """
+    UPGRADE B: Calculates a Dual-Engine correlation multiplier.
+    Combines Continuous Pairwise Max and Portfolio-Level Average Correlation,
+    enforcing the strictest decay.
+    """
     if not active_positions:
-        return 1.0, None
-    
+        return 1.0, None, "No active positions"
+
     yf_candidate = candidate.replace(".", "-")
     yf_active = [p.replace(".", "-") for p in active_positions]
     check_list = [p for p in yf_active if p != yf_candidate]
-    
+
     if not check_list:
-        return 1.0, None
-        
+        return 1.0, None, "No overlapping active positions"
+
     tickers_to_dl = check_list + [yf_candidate]
-    max_corr = 0.0
-    worst_tick = None
-    
+
     try:
         df = yf.download(tickers_to_dl, period="90d", progress=False)['Close']
-        if df.empty: return 1.0, None
-        
+        if df.empty:
+            return 1.0, None, "No data fetched"
+
         corr_matrix = df.corr()
-        if yf_candidate in corr_matrix.columns:
-            for active_tick in check_list:
-                if active_tick in corr_matrix.columns:
-                    corr_val = corr_matrix.loc[yf_candidate, active_tick]
-                    # Track the maximum correlation coefficient (max_corr)
-                    if pd.notna(corr_val) and corr_val > max_corr:
-                        max_corr = corr_val
-                        worst_tick = active_tick.replace("-", ".")
+        if yf_candidate not in corr_matrix.columns:
+            return 1.0, None, "Candidate not in matrix"
+
+        # --- ENGINE 1: CONTINUOUS PAIRWISE MAX ---
+        max_corr = 0.0
+        worst_tick = None
+        for active_tick in check_list:
+            if active_tick in corr_matrix.columns:
+                corr_val = corr_matrix.loc[yf_candidate, active_tick]
+                if pd.notna(corr_val) and corr_val > max_corr:
+                    max_corr = corr_val
+                    worst_tick = active_tick.replace("-", ".")
+
+        m_pairwise = 1.0
+        if worst_tick is not None:
+            m_pairwise = max(0.5, 1.0 - max(0.0, max_corr - 0.50))
+
+        # --- ENGINE 2: PORTFOLIO-LEVEL AVERAGE CORRELATION ---
+        # Isolate the candidate's correlation vector across check_list
+        valid_ticks = [t for t in check_list if t in corr_matrix.columns]
+        if valid_ticks:
+            portfolio_vector = corr_matrix.loc[yf_candidate, valid_ticks]
+            avg_corr = portfolio_vector.mean()
+            # Average correlation decay above 0.30 threshold
+            m_portfolio_avg = max(0.5, 1.0 - max(0.0, avg_corr - 0.30))
+        else:
+            avg_corr = 0.0
+            m_portfolio_avg = 1.0
+
+        # --- MINIMUM-OPERATOR SELECTION ---
+        # Choose the strictest risk penalty
+        if m_portfolio_avg < m_pairwise:
+            final_multiplier = m_portfolio_avg
+            trigger_reason = f"Systemic Portfolio Avg Correlation: {avg_corr:.2f}"
+        else:
+            final_multiplier = m_pairwise
+            trigger_reason = f"Pairwise Overlap w/ {worst_tick} ({max_corr:.2f})"
+
+        return round(final_multiplier, 4), worst_tick, trigger_reason
+
     except Exception as e:
         print(f"  [!] Correlation calculation error: {e}")
-        pass
-        
-    if worst_tick is not None:
-        # Continuous correlation multiplier decay formula:
-        # Any correlation > 0.50 smoothly scales down from 1.0 to a floor of 0.5
-        multiplier = max(0.5, 1.0 - max(0.0, max_corr - 0.50))
-        return round(multiplier, 4), worst_tick
-        
-    return 1.0, None
+        return 1.0, None, "Calculation Error"
 
 def update_sheet(row, entry_price, confidence_str, notes_str):
     today = datetime.now().strftime("%Y-%m-%d")
@@ -375,8 +402,8 @@ def main():
         if target_shares == 0 and total_equity >= target_entry and target_entry > 0:
             target_shares = 1
             
-        # --- UPGRADE A INTEGRATION: Continuous Sizing Multiplier ---
-        corr_multiplier, highly_correlated_ticker = get_correlation_multiplier(ticker, active_positions)
+        # --- UPGRADE B INTEGRATION: Dual-Engine Correlation Sizing ---
+        corr_multiplier, highly_correlated_ticker, trigger_reason = get_correlation_multiplier(ticker, active_positions)
         
         if corr_multiplier < 1.0:
             target_shares = math.floor(target_shares * corr_multiplier)
@@ -397,10 +424,10 @@ def main():
             # Scale risk visually based on the exact continuous multiplier
             active_risk_pct = (scaled_risk_pct * corr_multiplier) * 100
             confidence_str = f"{active_risk_pct:.2f}% Risk"
-            notes_str = f"Buy {target_shares} Shares (~${position_cost:,.2f}) | ⚠️ {corr_multiplier:.2f}x Correlation Sizing: Overlap w/ {highly_correlated_ticker}"
+            notes_str = f"Buy {target_shares} Shares (~${position_cost:,.2f}) | ⚠️ {corr_multiplier:.2f}x Correlation Sizing: {trigger_reason}"
             if sizing_note != "Standard Sizing":
                  notes_str += f" | {sizing_note}"
-            print(f"  [+] Dynamic Sizing: {confidence_str} (Penalty applied due to correlation with {highly_correlated_ticker}) | Buy {target_shares} shares")
+            print(f"  [+] Dynamic Sizing: {confidence_str} ({trigger_reason}) | Buy {target_shares} shares")
         else:
             notes_str = f"Buy {target_shares} Shares (~${position_cost:,.2f})"
             if sizing_note != "Standard Sizing":
