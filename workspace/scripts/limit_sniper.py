@@ -12,6 +12,8 @@ SHIELD_FILE = "/root/.openclaw/workspace/memory/quiver_shield.json"
 def main():
     from datetime import datetime, time
     now = datetime.now().time()
+    # Note: Server runs on America/Mexico_City (CST / UTC-6)
+    # Market Open 09:30 EST -> 07:30 CST. Close 16:00 EST -> 14:00 CST.
     if not (time(7, 30) <= now <= time(13, 55)):
         print("NO_REPLY")
         return
@@ -105,28 +107,45 @@ def main():
                     if action == "BUY":
                         shield_data = shield.get(ticker, {})
                         conviction = shield_data.get("score", 50)
+                        catalyst_score = shield_data.get("catalyst_score", 0)
+                        
                         if conviction < 50:
-                            reason = shield_data.get("reasoning", "Unknown")
-                            print(f"🚨 **TRADE ABORTED:** {ticker} dropped to ${current_price:.2f}, but Quiver Conviction Score is {conviction} (< 50). Shield activated. ({reason})")
-                            order["status"] = "aborted"
-                            updated = True
-                            continue
+                            # Advisor Note: "Shield and Spear" Override Logic (30-Point Threshold)
+                            # If Congressional macro score is bearish (< 50), normally we abort the trade.
+                            # However, if real-time corporate momentum (Government Contracts, Lobbying, Patents)
+                            # is extremely strong (catalyst_score >= 30), we override the block and execute.
+                            # 30 pts = e.g., 3 Govt Contracts, or 6 Lobbying filings.
+                            if catalyst_score >= 30:
+                                log_msg = f"{datetime.now().isoformat()} - ⚠️ **SHIELD OVERRIDE:** {ticker} conviction is low ({conviction}), but Catalyst Score is {catalyst_score} (>= 30). Spear overrides Shield. Proceeding with BUY.\\n"
+                                with open("/root/.openclaw/workspace/memory/sniper_alerts.log", "a") as logf: logf.write(log_msg)
+                            else:
+                                reason = shield_data.get("reasoning", "Unknown")
+                                log_msg = f"{datetime.now().isoformat()} - 🚨 **TRADE ABORTED:** {ticker} dropped to ${current_price:.2f}, but Quiver Conviction Score is {conviction} (< 50) and Catalyst Score is {catalyst_score} (< 30). Shield activated. ({reason})\\n"
+                                with open("/root/.openclaw/workspace/memory/sniper_alerts.log", "a") as logf: logf.write(log_msg)
+                                order["status"] = "aborted"
+                                updated = True
+                                continue
 
-                    if action == "SELL":
-                        msg = f"🚨 **SELL LIMIT REACHED:** {ticker} spiked to ${current_price:.2f}. Your {order_type} sell limit at ${target_price:.2f} was triggered!"
-                    elif action == "STOP_LOSS":
-                        msg = f"🛡️ **STOP-LOSS TRIGGERED:** {ticker} has broken the floor and dropped to ${current_price:.2f}. Your {order_type} stop-loss at ${target_price:.2f} was breached! "
-                    else:
-                        msg = f"🚨 **BUY LIMIT REACHED:** {ticker} dropped to ${current_price:.2f}. Your {order_type} buy limit trap at ${target_price:.2f} was triggered! "
                     # Log to execution queue
                     import time
                     from datetime import datetime
+                    
+                    if action == "SELL":
+                        log_msg = f"{datetime.now().isoformat()} - 🚨 **SELL LIMIT REACHED:** {ticker} spiked to ${current_price:.2f}. Your {order_type} sell limit at ${target_price:.2f} was triggered!\\n"
+                    elif action == "STOP_LOSS":
+                        log_msg = f"{datetime.now().isoformat()} - 🛡️ **STOP-LOSS TRIGGERED:** {ticker} has broken the floor and dropped to ${current_price:.2f}. Your {order_type} stop-loss at ${target_price:.2f} was breached!\\n"
+                    else:
+                        log_msg = f"{datetime.now().isoformat()} - 🎯 **BUY LIMIT REACHED:** {ticker} dropped to ${current_price:.2f}. Your {order_type} buy limit trap at ${target_price:.2f} was triggered!\\n"
+                    
+                    with open("/root/.openclaw/workspace/memory/sniper_alerts.log", "a") as logf: logf.write(log_msg)
+                    
                     try:
                         with open("/root/.openclaw/workspace/memory/execution_queue.json", "r") as eq_f:
                             exec_queue = json.load(eq_f)
                     except:
                         exec_queue = {}
                     
+                    os.makedirs(os.path.dirname("/root/.openclaw/workspace/memory/execution_queue.json"), exist_ok=True)
                     order_id = f"auto_{int(time.time())}_{ticker}"
                     exec_queue[order_id] = {
                         "timestamp": datetime.now().isoformat(),

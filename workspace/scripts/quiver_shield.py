@@ -2,7 +2,6 @@ import json
 import subprocess
 import os
 import urllib.request
-import re
 import time
 from datetime import datetime, timedelta
 
@@ -26,6 +25,7 @@ def get_dpi(ticker):
         try:
             dpi_data = json.loads(dpi_out)
             if dpi_data and len(dpi_data) > 0:
+                # The data is a list of dicts, so dpi_data[0] is the latest entry
                 return dpi_data[0].get("DPI", 0.5)
         except: pass
     return 0.5
@@ -55,6 +55,38 @@ def get_congress_trades(ticker, token):
         print(f"Error fetching Quiver data for {ticker}: {e}")
         return []
 
+def get_quiver_beta(endpoint, ticker, token):
+    url = f"https://api.quiverquant.com/beta/historical/{endpoint}/{ticker}"
+    headers = {
+        "Authorization": f"Bearer {token}", 
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+    }
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        res = urllib.request.urlopen(req).read()
+        return json.loads(res)
+    except:
+        return []
+
+def count_recent_events(events, cutoff_date):
+    count = 0
+    for ev in events:
+        # Check all possible date fields across the different endpoints
+        date_str = (ev.get("Date") or ev.get("date") or 
+                    ev.get("ReportDate") or ev.get("TransactionDate") or 
+                    ev.get("action_date") or ev.get("pub_date"))
+        if not date_str: continue
+        try:
+            # Handle timestamps (e.g., '2026-03-30 00:00:00' or '2026-03-30T12:00:00')
+            clean_date_str = str(date_str).split("T")[0].split(" ")[0]
+            t_date = datetime.strptime(clean_date_str, "%Y-%m-%d")
+            if t_date >= cutoff_date:
+                count += 1
+        except:
+            pass
+    return count
+
 def main():
     token = get_quiver_token()
     if not token:
@@ -69,6 +101,10 @@ def main():
 
     rows = watchlist_data["values"]
     
+    if not rows or len(rows) == 0:
+        print("Watchlist is empty.")
+        return
+        
     # Ensure header for Column J exists
     header_row = rows[0]
     while len(header_row) < 10:
@@ -77,6 +113,8 @@ def main():
         run_gog(f"update {LIVE_SHEET_ID} \"Watchlist!J1\" --values-json '[[\"Quiver Conviction\"]]' --input USER_ENTERED")
 
     ninety_days_ago = datetime.now() - timedelta(days=90)
+    fourteen_days_ago = datetime.now() - timedelta(days=14)
+    one_twenty_days_ago = datetime.now() - timedelta(days=120)
     
     shield_data = {}
 
@@ -90,6 +128,22 @@ def main():
         
         trades = get_congress_trades(ticker, token)
         dpi = get_dpi(ticker)
+        
+        # New Catalyst Fetches
+        contracts = get_quiver_beta("govcontracts", ticker, token)
+        lobbying = get_quiver_beta("lobbying", ticker, token)
+        patents = get_quiver_beta("allpatents", ticker, token)
+        
+        # Apply specific lookback windows per dataset
+        recent_contracts = count_recent_events(contracts, ninety_days_ago) # 90 days
+        recent_lobbying = count_recent_events(lobbying, one_twenty_days_ago) # 120 days
+        recent_patents = count_recent_events(patents, fourteen_days_ago) # 14 days
+        
+        cat_contracts = recent_contracts * 10
+        cat_lobbying = recent_lobbying * 5
+        cat_patents = min(recent_patents * 2, 10) # Cap at 10 points
+        
+        catalyst_score = cat_contracts + cat_lobbying + cat_patents
         
         score = 50
         buys = 0
@@ -139,20 +193,25 @@ def main():
         score = max(0, min(100, score)) # Cap between 0 and 100
         
         if buys > 0 or sells > 0:
-            reasoning = f"Buys: {buys}, Sells: {sells} ({latest_action}) | DPI: {dpi:.2f}"
+            macro_reasoning = f"Buys: {buys}, Sells: {sells} ({latest_action})"
         else:
-            reasoning = f"Neutral: No recent activity | DPI: {dpi:.2f}"
+            macro_reasoning = f"Neutral: No recent activity"
             
-        display_text = f"{score} | {reasoning}"
+        reasoning = f"{macro_reasoning} | DPI: {dpi:.2f} | Catalysts: {catalyst_score}pts (C:{recent_contracts} L:{recent_lobbying} P:{recent_patents})"
+        display_text = f"Macro: {score} | Catalyst: {catalyst_score} | Buys: {buys}, Sells: {sells} | DPI: {dpi:.2f}"
         
         shield_data[ticker] = {
             "score": score,
+            "catalyst_score": catalyst_score,
+            "recent_contracts": recent_contracts,
+            "recent_lobbying": recent_lobbying,
+            "recent_patents": recent_patents,
             "reasoning": reasoning,
             "dpi": dpi,
             "last_updated": datetime.now().isoformat()
         }
         
-        print(f"  Score: {score} -> {reasoning}")
+        print(f"  Macro Score: {score} | Catalyst Score: {catalyst_score} (C:{recent_contracts} L:{recent_lobbying} P:{recent_patents})")
         
         payload = [[display_text]]
         safe_payload = json.dumps(payload)

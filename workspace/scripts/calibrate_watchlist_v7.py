@@ -333,7 +333,24 @@ def main():
         
         # --- PHASE 4: DYNAMIC POSITION SIZING (RISK PARITY & CORRELATION) ---
         m = opt.get("exit_multiplier_used", 3.0)
-        risk_dollar_amount = total_equity * 0.01  # 1% Total Equity Risk
+        
+        # Advisor Note: Catalyst Multiplier Integration
+        shield_data = shield_cache.get(ticker, {})
+        catalyst_score = shield_data.get("catalyst_score", 0)
+        
+        if catalyst_score >= 50:
+            catalyst_multiplier = 1.50
+            sizing_note = f"🚀 1.5x Sizing: Monumental Catalyst ({catalyst_score} pts)"
+        elif catalyst_score >= 30:
+            catalyst_multiplier = 1.25
+            sizing_note = f"⚡ 1.25x Sizing: High Momentum ({catalyst_score} pts)"
+        else:
+            catalyst_multiplier = 1.00
+            sizing_note = "Standard Sizing"
+            
+        # Scale the At-Risk Capital
+        scaled_risk_pct = 0.01 * catalyst_multiplier
+        risk_dollar_amount = total_equity * scaled_risk_pct
         
         target_shares = 0
         if target_entry > 0 and atr > 0 and m > 0:
@@ -349,16 +366,28 @@ def main():
             target_shares = math.floor(target_shares * 0.5)
             if target_shares == 0 and total_equity >= target_entry and target_entry > 0:
                 target_shares = 1 
+                
+        # Advisor Note: The Capital Outlay Cap
+        max_capital_allowed = total_equity * 0.10 # Max 10% of portfolio equity in physical cash outlay
+        position_cost = target_shares * target_entry
 
-        total_cost = target_shares * target_entry
-        
-        confidence_str = "1.0% Risk"
+        if position_cost > max_capital_allowed:
+            target_shares = math.floor(max_capital_allowed / target_entry)
+            sizing_note += " | 🛑 Capped by 10% Outlay Limit"
+            position_cost = target_shares * target_entry # Recalculate
+
+        confidence_str = f"{scaled_risk_pct*100:.1f}% Risk"
         if penalty_hit:
-            confidence_str = "0.5% Risk"
-            notes_str = f"Buy {target_shares} Shares (~${total_cost:,.2f}) | ⚠️ 0.5x Sizing: >0.75 corr w/ {highly_correlated_ticker}"
+            # Correlation penalty forces risk back down visually based on halved scale
+            confidence_str = f"{(scaled_risk_pct * 0.5) * 100:.2f}% Risk"
+            notes_str = f"Buy {target_shares} Shares (~${position_cost:,.2f}) | ⚠️ 0.5x Sizing: >0.75 corr w/ {highly_correlated_ticker}"
+            if sizing_note != "Standard Sizing":
+                 notes_str += f" | {sizing_note}"
             print(f"  [+] Dynamic Sizing: {confidence_str} (Penalty applied due to correlation with {highly_correlated_ticker}) | Buy {target_shares} shares")
         else:
-            notes_str = f"Buy {target_shares} Shares (~${total_cost:,.2f})"
+            notes_str = f"Buy {target_shares} Shares (~${position_cost:,.2f})"
+            if sizing_note != "Standard Sizing":
+                 notes_str += f" | {sizing_note}"
             print(f"  [+] Dynamic Sizing: {confidence_str} | {notes_str} (Multiplier: {m}x)")
         
         update_sheet(row, target_entry, confidence_str, notes_str)
