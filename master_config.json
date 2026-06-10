@@ -286,6 +286,13 @@
           "-c",
           "npx mcp-remote \"https://mcp.tavily.com/mcp/?tavilyApiKey=${TAVILY_API_KEY}\""
         ]
+      },
+      "QuiverQuant MCP": {
+        "command": "sh",
+        "args": [
+          "-c",
+          "npx -y mcp-remote https://mcp.quiverquant.com/ --header \"Authorization: Bearer ${QUIVER_API_KEY}\""
+        ]
       }
     }
   },
