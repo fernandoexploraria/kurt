@@ -5,6 +5,8 @@ from datetime import datetime
 import time
 import requests
 import math
+import yfinance as yf
+import pandas as pd
 
 TEST_SHEET_ID = "1kjzfc6uEzBFtmNjlU1x3TVbHuWPgY7jnNce8mNTe66I"
 ACCOUNT = "fernando@exploraria.ai"
@@ -43,18 +45,27 @@ def run_subprocess(cmd):
     if result.returncode != 0: return None
     return result.stdout.strip()
 
-def get_total_cash():
-    cmd = f"GOG_ACCOUNT={ACCOUNT} gog sheets get {TEST_SHEET_ID} 'Positions!A1:C10' --json"
+def get_total_equity():
+    cmd = f"GOG_ACCOUNT={ACCOUNT} gog sheets get {TEST_SHEET_ID} 'Positions!F3' --json"
     out = run_subprocess(cmd)
     if not out: return 0.0
     data = json.loads(out)
+    try:
+        val = data.get('values', [['0']])[0][0]
+        return float(str(val).replace(',', '').replace('$', ''))
+    except:
+        return 0.0
+
+def get_active_positions():
+    cmd = f"GOG_ACCOUNT={ACCOUNT} gog sheets get {TEST_SHEET_ID} 'Positions!A4:A50' --json"
+    out = run_subprocess(cmd)
+    if not out: return []
+    data = json.loads(out)
+    tickers = []
     for row in data.get('values', []):
-        if len(row) >= 3 and str(row[0]).strip() == "CASH":
-            try:
-                return float(str(row[2]).replace(',', '').replace('$', ''))
-            except:
-                return 0.0
-    return 0.0
+        if row and row[0].strip() and row[0].strip() != "CASH":
+            tickers.append(row[0].strip())
+    return tickers
 
 def get_watchlist():
     cmd = f"GOG_ACCOUNT={ACCOUNT} gog sheets get {TEST_SHEET_ID} 'Watchlist!A2:H50' --json"
@@ -187,6 +198,32 @@ def get_quiver_adjustments(ticker, shield_cache):
         
     return modifier
 
+def get_correlation_penalty(candidate, active_positions):
+    if not active_positions:
+        return False, None
+    
+    yf_candidate = candidate.replace(".", "-")
+    yf_active = [p.replace(".", "-") for p in active_positions]
+    check_list = [p for p in yf_active if p != yf_candidate]
+    
+    if not check_list:
+        return False, None
+        
+    tickers_to_dl = check_list + [yf_candidate]
+    try:
+        df = yf.download(tickers_to_dl, period="90d", progress=False)['Close']
+        if df.empty: return False, None
+        
+        corr_matrix = df.corr()
+        for active_tick in check_list:
+            if active_tick in corr_matrix.columns and yf_candidate in corr_matrix.columns:
+                corr_val = corr_matrix.loc[yf_candidate, active_tick]
+                if pd.notna(corr_val) and corr_val > 0.75:
+                    return True, active_tick.replace("-", ".")
+    except:
+        pass
+    return False, None
+
 def update_sheet(row, entry_price, confidence_str, notes_str):
     today = datetime.now().strftime("%Y-%m-%d")
     run_subprocess(f"GOG_ACCOUNT={ACCOUNT} gog sheets update {TEST_SHEET_ID} 'Watchlist!D{row}' --values-json '[[{entry_price}]]' --input USER_ENTERED")
@@ -228,8 +265,11 @@ def main():
     cache = load_cache()
     shield_cache = load_shield()
     
-    total_cash = get_total_cash()
-    print(f"[i] Live Portfolio Cash: ${total_cash:,.2f}")
+    total_equity = get_total_equity()
+    print(f"[i] Live Portfolio Total Equity: ${total_equity:,.2f}")
+    
+    active_positions = get_active_positions()
+    print(f"[i] Active Positions Found: {len(active_positions)}")
     
     # Load Optimized Brain
     optimized_file = "/root/.openclaw/workspace/memory/optimized_entries.json"
@@ -291,28 +331,35 @@ def main():
             
         print(f"  [=] FINAL SNIPER ENTRY: ${target_entry}")
         
-        # --- PHASE 4: DYNAMIC POSITION SIZING (TIERED CONVICTION ALLOCATION) ---
-        win_rate = opt.get("win_rate_pct", 0.0)
-        allocation_pct = 0.10 # Default
-        if win_rate >= 65.0:
-            allocation_pct = 0.25
-        elif win_rate >= 50.0:
-            allocation_pct = 0.15
-            
-        capital_to_deploy = total_cash * allocation_pct
+        # --- PHASE 4: DYNAMIC POSITION SIZING (RISK PARITY & CORRELATION) ---
+        m = opt.get("exit_multiplier_used", 3.0)
+        risk_dollar_amount = total_equity * 0.01  # 1% Total Equity Risk
+        
         target_shares = 0
-        if target_entry > 0:
-            target_shares = math.floor(capital_to_deploy / target_entry)
+        if target_entry > 0 and atr > 0 and m > 0:
+            target_shares = math.floor(risk_dollar_amount / (atr * m))
             
         # The 'At Least One' Override
-        if target_shares == 0 and total_cash >= target_entry:
+        if target_shares == 0 and total_equity >= target_entry and target_entry > 0:
             target_shares = 1
             
-        total_cost = target_shares * target_entry
-        confidence_str = f"{allocation_pct * 100:.1f}% Alloc"
-        notes_str = f"Buy {target_shares} Shares (~${total_cost:,.2f})"
+        penalty_hit, highly_correlated_ticker = get_correlation_penalty(ticker, active_positions)
         
-        print(f"  [+] Dynamic Sizing: {confidence_str} | {notes_str} (Win Rate: {win_rate}%)")
+        if penalty_hit:
+            target_shares = math.floor(target_shares * 0.5)
+            if target_shares == 0 and total_equity >= target_entry and target_entry > 0:
+                target_shares = 1 
+
+        total_cost = target_shares * target_entry
+        
+        confidence_str = "1.0% Risk"
+        if penalty_hit:
+            confidence_str = "0.5% Risk"
+            notes_str = f"Buy {target_shares} Shares (~${total_cost:,.2f}) | ⚠️ 0.5x Sizing: >0.75 corr w/ {highly_correlated_ticker}"
+            print(f"  [+] Dynamic Sizing: {confidence_str} (Penalty applied due to correlation with {highly_correlated_ticker}) | Buy {target_shares} shares")
+        else:
+            notes_str = f"Buy {target_shares} Shares (~${total_cost:,.2f})"
+            print(f"  [+] Dynamic Sizing: {confidence_str} | {notes_str} (Multiplier: {m}x)")
         
         update_sheet(row, target_entry, confidence_str, notes_str)
         
