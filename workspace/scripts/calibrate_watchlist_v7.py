@@ -198,31 +198,46 @@ def get_quiver_adjustments(ticker, shield_cache):
         
     return modifier
 
-def get_correlation_penalty(candidate, active_positions):
+def get_correlation_multiplier(candidate, active_positions):
+    """Calculates the continuous decay correlation multiplier against currently active positions."""
     if not active_positions:
-        return False, None
+        return 1.0, None
     
     yf_candidate = candidate.replace(".", "-")
     yf_active = [p.replace(".", "-") for p in active_positions]
     check_list = [p for p in yf_active if p != yf_candidate]
     
     if not check_list:
-        return False, None
+        return 1.0, None
         
     tickers_to_dl = check_list + [yf_candidate]
+    max_corr = 0.0
+    worst_tick = None
+    
     try:
         df = yf.download(tickers_to_dl, period="90d", progress=False)['Close']
-        if df.empty: return False, None
+        if df.empty: return 1.0, None
         
         corr_matrix = df.corr()
-        for active_tick in check_list:
-            if active_tick in corr_matrix.columns and yf_candidate in corr_matrix.columns:
-                corr_val = corr_matrix.loc[yf_candidate, active_tick]
-                if pd.notna(corr_val) and corr_val > 0.75:
-                    return True, active_tick.replace("-", ".")
-    except:
+        if yf_candidate in corr_matrix.columns:
+            for active_tick in check_list:
+                if active_tick in corr_matrix.columns:
+                    corr_val = corr_matrix.loc[yf_candidate, active_tick]
+                    # Track the maximum correlation coefficient (max_corr)
+                    if pd.notna(corr_val) and corr_val > max_corr:
+                        max_corr = corr_val
+                        worst_tick = active_tick.replace("-", ".")
+    except Exception as e:
+        print(f"  [!] Correlation calculation error: {e}")
         pass
-    return False, None
+        
+    if worst_tick is not None:
+        # Continuous correlation multiplier decay formula:
+        # Any correlation > 0.50 smoothly scales down from 1.0 to a floor of 0.5
+        multiplier = max(0.5, 1.0 - max(0.0, max_corr - 0.50))
+        return round(multiplier, 4), worst_tick
+        
+    return 1.0, None
 
 def update_sheet(row, entry_price, confidence_str, notes_str):
     today = datetime.now().strftime("%Y-%m-%d")
@@ -360,10 +375,11 @@ def main():
         if target_shares == 0 and total_equity >= target_entry and target_entry > 0:
             target_shares = 1
             
-        penalty_hit, highly_correlated_ticker = get_correlation_penalty(ticker, active_positions)
+        # --- UPGRADE A INTEGRATION: Continuous Sizing Multiplier ---
+        corr_multiplier, highly_correlated_ticker = get_correlation_multiplier(ticker, active_positions)
         
-        if penalty_hit:
-            target_shares = math.floor(target_shares * 0.5)
+        if corr_multiplier < 1.0:
+            target_shares = math.floor(target_shares * corr_multiplier)
             if target_shares == 0 and total_equity >= target_entry and target_entry > 0:
                 target_shares = 1 
                 
@@ -377,10 +393,11 @@ def main():
             position_cost = target_shares * target_entry # Recalculate
 
         confidence_str = f"{scaled_risk_pct*100:.1f}% Risk"
-        if penalty_hit:
-            # Correlation penalty forces risk back down visually based on halved scale
-            confidence_str = f"{(scaled_risk_pct * 0.5) * 100:.2f}% Risk"
-            notes_str = f"Buy {target_shares} Shares (~${position_cost:,.2f}) | ⚠️ 0.5x Sizing: >0.75 corr w/ {highly_correlated_ticker}"
+        if corr_multiplier < 1.0:
+            # Scale risk visually based on the exact continuous multiplier
+            active_risk_pct = (scaled_risk_pct * corr_multiplier) * 100
+            confidence_str = f"{active_risk_pct:.2f}% Risk"
+            notes_str = f"Buy {target_shares} Shares (~${position_cost:,.2f}) | ⚠️ {corr_multiplier:.2f}x Correlation Sizing: Overlap w/ {highly_correlated_ticker}"
             if sizing_note != "Standard Sizing":
                  notes_str += f" | {sizing_note}"
             print(f"  [+] Dynamic Sizing: {confidence_str} (Penalty applied due to correlation with {highly_correlated_ticker}) | Buy {target_shares} shares")
