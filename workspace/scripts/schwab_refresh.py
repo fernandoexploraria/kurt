@@ -41,8 +41,12 @@ def refresh_token():
             elapsed_days = (datetime.now() - auth_ts).total_seconds() / 86400.0
             
             if elapsed_days >= 6.0 and not warning_sent:
-                alert_cmd = ['openclaw', 'system', 'event', '--mode', 'now', '--text', 
-                             '⚠️ Fer, your Schwab token expires in 24 hours. To prevent trade failures, run this command now: python3 /root/.openclaw/workspace/scripts/schwab_auth.py']
+                alert_cmd = [
+                    'curl', '-s', '-X', 'POST', 
+                    f'https://api.telegram.org/bot{os.environ.get("TELEGRAM_BOT_TOKEN")}/sendMessage',
+                    '-d', f'chat_id={os.environ.get("TELEGRAM_ALLOWED_USER_1")}',
+                    '-d', 'text=⚠️ Fer, your Schwab token expires in 24 hours. To prevent trade failures, run this command now: python3 /root/.openclaw/workspace/scripts/schwab_auth.py'
+                ]
                 subprocess.run(alert_cmd)
                 tokens["warning_sent"] = True
                 with open(TOKENS_FILE, 'w') as f:
@@ -93,8 +97,12 @@ def refresh_token():
         print(f"API Error during refresh ({e.code}): {body}")
         
         if "invalid_grant" in body or "expired" in body.lower():
-            alert_cmd = ['openclaw', 'system', 'event', '--mode', 'now', '--text', 
-                         '🚨 CRITICAL: Schwab Refresh Token has officially expired. Options and limit orders are offline. You must re-authenticate immediately by running: python3 /root/.openclaw/workspace/scripts/schwab_auth.py']
+            alert_cmd = [
+                'curl', '-s', '-X', 'POST', 
+                f'https://api.telegram.org/bot{os.environ.get("TELEGRAM_BOT_TOKEN")}/sendMessage',
+                '-d', f'chat_id={os.environ.get("TELEGRAM_ALLOWED_USER_1")}',
+                '-d', 'text=🚨 CRITICAL: Schwab Refresh Token has officially expired. Options and limit orders are offline. You must re-authenticate immediately by running: python3 /root/.openclaw/workspace/scripts/schwab_auth.py'
+            ]
             subprocess.run(alert_cmd)
             
         return False
