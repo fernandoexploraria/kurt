@@ -7,6 +7,7 @@ import requests
 import math
 import yfinance as yf
 import pandas as pd
+import numpy as np
 
 TEST_SHEET_ID = "1kjzfc6uEzBFtmNjlU1x3TVbHuWPgY7jnNce8mNTe66I"
 ACCOUNT = "fernando@exploraria.ai"
@@ -63,9 +64,82 @@ def get_active_positions():
     data = json.loads(out)
     tickers = []
     for row in data.get('values', []):
-        if row and row[0].strip() and row[0].strip() != "CASH":
+        if len(row) > 0 and row[0].strip() and row[0].strip() != "CASH":
             tickers.append(row[0].strip())
     return tickers
+
+def get_macro_regime(active_positions):
+    spy_close = 0.0
+    spy_sma200 = 0.0
+    vix_close = 0.0
+    avg_portfolio_corr = 0.0
+    
+    try:
+        df_macro = yf.download(["SPY", "^VIX"], period="1y", progress=False)['Close']
+        if not df_macro.empty:
+            if "SPY" in df_macro.columns:
+                spy_series = df_macro["SPY"].dropna()
+                if not spy_series.empty:
+                    spy_close = spy_series.iloc[-1]
+                    if len(spy_series) >= 200:
+                        spy_sma200 = spy_series.rolling(window=200).mean().iloc[-1]
+            if "^VIX" in df_macro.columns:
+                vix_series = df_macro["^VIX"].dropna()
+                if not vix_series.empty:
+                    vix_close = vix_series.iloc[-1]
+        
+        if active_positions and len(active_positions) > 1:
+            yf_active = [p.replace(".", "-") for p in active_positions]
+            df_port = yf.download(yf_active, period="90d", progress=False)['Close']
+            if not df_port.empty:
+                corr_matrix = df_port.corr()
+                mask = np.triu(np.ones(corr_matrix.shape, dtype=bool), k=1)
+                avg_val = corr_matrix.where(mask).mean().mean()
+                if pd.notna(avg_val):
+                    avg_portfolio_corr = float(avg_val)
+    except Exception as e:
+        print(f"  [!] Error fetching macro regime data: {e}")
+        
+    regime_state = 1
+    if spy_sma200 > 0: # Ensure valid SPY data before applying logic
+        if (spy_close < spy_sma200) or (vix_close > 25) or (avg_portfolio_corr >= 0.50):
+            regime_state = 3
+        elif (spy_close >= spy_sma200) and ((vix_close >= 20) or (avg_portfolio_corr >= 0.35)):
+            regime_state = 2
+            
+    return regime_state, spy_close, spy_sma200, vix_close, avg_portfolio_corr
+
+def get_beta(ticker, cache):
+    """
+    Retrieves the 1-year historical beta using the fast, cached TradingView RapidAPI.
+    Prevents the latency, rate-limiting, and silent default errors of yfinance.
+    """
+    prefixes = ["NASDAQ:", "NYSE:", "AMEX:", "BATS:", "CRYPTO:"]
+    if ticker in cache:
+        prefixes = [cache[ticker]] + [p for p in prefixes if p != cache[ticker]]
+
+    headers = {
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "x-rapidapi-host": RAPIDAPI_HOST
+    }
+
+    for prefix in prefixes:
+        url = f"https://{RAPIDAPI_HOST}/api/quote/{prefix}{ticker}?fields=beta_1_year"
+        try:
+            res = requests.get(url, headers=headers, timeout=10).json()
+            if res.get("success"):
+                # Dynamically cache the successful prefix
+                if ticker not in cache or cache[ticker] != prefix:
+                    cache[ticker] = prefix
+                    save_cache(cache)
+                try:
+                    return float(res["data"]["data"]["beta_1_year"])
+                except:
+                    return 1.0
+        except:
+            pass
+        time.sleep(0.1) # Minimal throttling for RapidAPI
+    return 1.0
 
 def get_watchlist():
     cmd = f"GOG_ACCOUNT={ACCOUNT} gog sheets get {TEST_SHEET_ID} 'Watchlist!A2:H50' --json"
@@ -313,6 +387,10 @@ def main():
     active_positions = get_active_positions()
     print(f"[i] Active Positions Found: {len(active_positions)}")
     
+    # --- PHASE 1: SYSTEMIC MACRO REGIME DETERMINATION ---
+    regime_state, spy_close, spy_sma200, vix_close, avg_portfolio_corr = get_macro_regime(active_positions)
+    print(f"[i] Macro Regime State: {regime_state} | SPY: ${spy_close:.2f} (SMA200: ${spy_sma200:.2f}) | VIX: {vix_close:.2f} | Avg Corr: {avg_portfolio_corr:.2f}")
+
     # Load Optimized Brain
     optimized_file = "/root/.openclaw/workspace/memory/optimized_entries.json"
     optimized_entries = {}
@@ -391,21 +469,40 @@ def main():
             sizing_note = "Standard Sizing"
             
         # Scale the At-Risk Capital
-        scaled_risk_pct = 0.01 * catalyst_multiplier
+        # --- PATH B: MULTI-STATE REGIME SIZING ---
+        beta = get_beta(ticker, cache)
+        regime_multiplier = 1.00
+        
+        if regime_state == 2:
+            if beta >= 1.05:
+                regime_multiplier = 0.50 # Squeeze growth plays during chop
+                if sizing_note == "Standard Sizing": sizing_note = ""
+                sizing_note += " | ⚠️ Chop Regime: 0.5x Growth Penalty"
+        elif regime_state == 3:
+            if beta >= 1.05:
+                regime_multiplier = 0.00 # Zero risk allocated to tech during panic
+                if sizing_note == "Standard Sizing": sizing_note = ""
+                sizing_note += " | 🛑 Bear Regime: speculative trades DISABLED"
+            else:
+                regime_multiplier = 0.50 # Scale back defensive buys
+                if sizing_note == "Standard Sizing": sizing_note = ""
+                sizing_note += " | 🛡️ Bear Regime: 0.5x Defensive Scaling"
+                
+        scaled_risk_pct = 0.01 * catalyst_multiplier * regime_multiplier
         risk_dollar_amount = total_equity * scaled_risk_pct
         
         target_shares = 0
-        if target_entry > 0 and atr > 0 and m > 0:
+        if target_entry > 0 and atr > 0 and m > 0 and regime_multiplier > 0:
             target_shares = math.floor(risk_dollar_amount / (atr * m))
             
         # The 'At Least One' Override
-        if target_shares == 0 and total_equity >= target_entry and target_entry > 0:
+        if target_shares == 0 and total_equity >= target_entry and target_entry > 0 and regime_multiplier > 0:
             target_shares = 1
             
         # --- UPGRADE B INTEGRATION: Dual-Engine Correlation Sizing ---
         corr_multiplier, highly_correlated_ticker, trigger_reason = get_correlation_multiplier(ticker, active_positions)
         
-        if corr_multiplier < 1.0:
+        if corr_multiplier < 1.0 and regime_multiplier > 0:
             target_shares = math.floor(target_shares * corr_multiplier)
             if target_shares == 0 and total_equity >= target_entry and target_entry > 0:
                 target_shares = 1 
@@ -420,19 +517,25 @@ def main():
             position_cost = target_shares * target_entry # Recalculate
 
         confidence_str = f"{scaled_risk_pct*100:.1f}% Risk"
-        if corr_multiplier < 1.0:
+        if corr_multiplier < 1.0 and regime_multiplier > 0:
             # Scale risk visually based on the exact continuous multiplier
             active_risk_pct = (scaled_risk_pct * corr_multiplier) * 100
             confidence_str = f"{active_risk_pct:.2f}% Risk"
             notes_str = f"Buy {target_shares} Shares (~${position_cost:,.2f}) | ⚠️ {corr_multiplier:.2f}x Correlation Sizing: {trigger_reason}"
-            if sizing_note != "Standard Sizing":
-                 notes_str += f" | {sizing_note}"
+            if sizing_note != "Standard Sizing" and sizing_note != "":
+                 notes_str += f" {sizing_note}"
             print(f"  [+] Dynamic Sizing: {confidence_str} ({trigger_reason}) | Buy {target_shares} shares")
         else:
-            notes_str = f"Buy {target_shares} Shares (~${position_cost:,.2f})"
-            if sizing_note != "Standard Sizing":
-                 notes_str += f" | {sizing_note}"
-            print(f"  [+] Dynamic Sizing: {confidence_str} | {notes_str} (Multiplier: {m}x)")
+            if regime_multiplier == 0:
+                notes_str = f"Buy 0 Shares (~$0.00)"
+                if sizing_note != "Standard Sizing" and sizing_note != "":
+                     notes_str += f" {sizing_note}"
+                print(f"  [+] Dynamic Sizing: {confidence_str} | {notes_str}")
+            else:
+                notes_str = f"Buy {target_shares} Shares (~${position_cost:,.2f})"
+                if sizing_note != "Standard Sizing" and sizing_note != "":
+                     notes_str += f" {sizing_note}"
+                print(f"  [+] Dynamic Sizing: {confidence_str} | {notes_str} (Multiplier: {m}x)")
         
         update_sheet(row, target_entry, confidence_str, notes_str)
         
