@@ -86,3 +86,9 @@ We maintain the **Hybrid Build Strategy**. We do NOT use pure `image:` tags in `
 - **Rule 3 (Confirmation):** Present the live quote, total transaction value, and exact action to Fer. You MUST require an explicit "CONFIRM" from Fer before proceeding.
 - **Rule 4 (Injection):** Only upon explicit confirmation, safely append the JSON payload into `memory/execution_queue.json` with `"order_type": "IMMEDIATE"` and `"source": "Telegram Chat"`.
 - **Rule 5 (Decoupling):** Never manually update the Google Sheet from the chat session. Just write to the queue. The 1-Minute Execution Cron will independently pick it up and process the ledger, cash, and asset updates.
+
+## 🔒 Schwab 7-Day Expiry Protocol
+- **The Dual Token System:** Access Tokens live for 30 mins (used for trades/data). Refresh Tokens live for 7 days (used to get new Access Tokens).
+- **The Hard Limit:** At exactly 7 days, the Refresh Token dies. Schwab's API will return a compressed `gzip` 400 Bad Request (`invalid_grant`).
+- **The Recovery Procedure:** To restore the API connection, Kurt (or the User) must execute `python3 /root/.openclaw/workspace/scripts/schwab_auth.py`, log into Schwab via the browser, and copy the `https://127.0.0.1/?code=...` callback URL back to the script.
+- **The Defense-in-Depth Pipeline:** `schwab_auth.py` embeds an `auth_timestamp`. Every 25 mins, `schwab_refresh.py` calculates token age. At exactly 6.0 days, it fires a warning via the OpenClaw system event injector. If the token officially dies, it intercepts the `invalid_grant` 400 error and fires a CRITICAL system event to Telegram.

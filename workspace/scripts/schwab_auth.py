@@ -4,6 +4,7 @@ import base64
 import urllib.request
 import urllib.parse
 import re
+import gzip
 
 TOOLS_PATH = "/root/.openclaw/workspace/TOOLS.md"
 TOKENS_FILE = "/root/.openclaw/workspace/memory/schwab_tokens.json"
@@ -66,6 +67,8 @@ def exchange_code_for_tokens(creds, auth_code):
             
             # Save tokens
             os.makedirs(os.path.dirname(TOKENS_FILE), exist_ok=True)
+            res_data["auth_timestamp"] = datetime.now().isoformat()
+            res_data["warning_sent"] = False
             with open(TOKENS_FILE, 'w') as f:
                 json.dump(res_data, f, indent=2)
                 
@@ -73,7 +76,12 @@ def exchange_code_for_tokens(creds, auth_code):
             print(f"Access Token expires in: {res_data.get('expires_in', 1800)} seconds")
             
     except urllib.error.HTTPError as e:
-        print(f"\n❌ API Error ({e.code}): {e.read().decode()}")
+        raw_body = e.read()
+        try:
+            body = gzip.decompress(raw_body).decode()
+        except Exception:
+            body = raw_body.decode(errors='replace')
+        print(f"\n❌ API Error ({e.code}): {body}")
     except Exception as e:
         print(f"\n❌ Request failed: {e}")
 
