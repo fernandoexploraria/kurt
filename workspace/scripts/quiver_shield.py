@@ -40,6 +40,28 @@ def run_gog(cmd):
     except:
         return None
 
+import urllib.error
+
+def fetch_with_retry(url, headers, max_retries=4):
+    for attempt in range(max_retries):
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            res = urllib.request.urlopen(req).read()
+            return json.loads(res)
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                wait_time = 2 ** attempt  # 1s, 2s, 4s, 8s
+                print(f"    Rate limited (429) on {url.split('/')[-2]}/{url.split('/')[-1]}. Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                print(f"    HTTP Error {e.code} for {url.split('/')[-2]}/{url.split('/')[-1]}")
+                return []
+        except Exception as e:
+            print(f"    Error fetching Quiver data: {e}")
+            return []
+    print(f"    Failed after {max_retries} attempts for {url.split('/')[-2]}/{url.split('/')[-1]}")
+    return []
+
 def get_congress_trades(ticker, token):
     url = f"https://api.quiverquant.com/beta/historical/congresstrading/{ticker}"
     headers = {
@@ -47,13 +69,7 @@ def get_congress_trades(ticker, token):
         "Accept": "application/json",
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
     }
-    req = urllib.request.Request(url, headers=headers)
-    try:
-        res = urllib.request.urlopen(req).read()
-        return json.loads(res)
-    except Exception as e:
-        print(f"Error fetching Quiver data for {ticker}: {e}")
-        return []
+    return fetch_with_retry(url, headers)
 
 def get_quiver_beta(endpoint, ticker, token):
     url = f"https://api.quiverquant.com/beta/historical/{endpoint}/{ticker}"
@@ -62,12 +78,7 @@ def get_quiver_beta(endpoint, ticker, token):
         "Accept": "application/json",
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
     }
-    req = urllib.request.Request(url, headers=headers)
-    try:
-        res = urllib.request.urlopen(req).read()
-        return json.loads(res)
-    except:
-        return []
+    return fetch_with_retry(url, headers)
 
 def count_recent_events(events, cutoff_date):
     count = 0
@@ -127,11 +138,18 @@ def main():
         print(f"\nAnalyzing {ticker}...")
         
         trades = get_congress_trades(ticker, token)
+        time.sleep(0.5)
+        
         dpi = get_dpi(ticker)
+        time.sleep(0.5)
         
         # New Catalyst Fetches
         contracts = get_quiver_beta("govcontracts", ticker, token)
+        time.sleep(0.5)
+        
         lobbying = get_quiver_beta("lobbying", ticker, token)
+        time.sleep(0.5)
+        
         patents = get_quiver_beta("allpatents", ticker, token)
         
         # Apply specific lookback windows per dataset

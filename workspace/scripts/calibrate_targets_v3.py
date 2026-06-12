@@ -13,6 +13,7 @@ ACCOUNT = "fernando@exploraria.ai"
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY") # EXACT KEY FROM SCREENSHOT
 RAPIDAPI_HOST = "tradingview-data1.p.rapidapi.com"
 CACHE_FILE = "/root/.openclaw/workspace/memory/exchange_cache.json"
+ORDERS_FILE = "/root/.openclaw/workspace/memory/pending_orders.json"
 
 def load_cache():
     if os.path.exists(CACHE_FILE):
@@ -165,6 +166,45 @@ def update_sheet(row, target_price, floor_price, atr_val):
     run_subprocess(f"GOG_ACCOUNT={ACCOUNT} gog sheets update {TEST_SHEET_ID} 'Positions!J{row}' --values-json '[[{atr_val}]]' --input USER_ENTERED")
     run_subprocess(f"GOG_ACCOUNT={ACCOUNT} gog sheets update {TEST_SHEET_ID} 'Positions!K{row}' --values-json '[[{floor_price}]]' --input USER_ENTERED")
 
+def sync_pending_orders(results):
+    if not os.path.exists(ORDERS_FILE):
+        return
+    try:
+        with open(ORDERS_FILE, 'r') as f:
+            orders = json.load(f)
+    except:
+        return
+        
+    updated = False
+    print("\n=== SYNCHRONIZING EXIT TRAPS (SELL / STOP_LOSS) ===")
+    
+    target_lookup = {r['ticker']: r['target'] for r in results}
+    floor_lookup = {r['ticker']: r['floor'] for r in results}
+
+    for ticker, data in orders.items():
+        if data.get("status") == "waiting":
+            if data.get("action") == "SELL" and ticker in target_lookup:
+                old_price = data.get("target_price")
+                new_price = target_lookup[ticker]
+                if old_price != new_price:
+                    print(f"  [Sync] Updating {ticker} TAKE_PROFIT Trap: ${old_price} -> ${new_price}")
+                    data["target_price"] = new_price
+                    updated = True
+            elif data.get("action") == "STOP_LOSS" and ticker in floor_lookup:
+                old_price = data.get("target_price")
+                new_price = floor_lookup[ticker]
+                if old_price != new_price:
+                    print(f"  [Sync] Updating {ticker} STOP_LOSS Trap: ${old_price} -> ${new_price}")
+                    data["target_price"] = new_price
+                    updated = True
+                    
+    if updated:
+        with open(ORDERS_FILE, 'w') as f:
+            json.dump(orders, f, indent=2)
+        print("  [✓] All exit traps synchronized successfully.")
+    else:
+        print("  [-] No waiting exit traps required updating.")
+
 def main():
     print("Starting UNIFIED V2.1 Target Calibration (Dynamic ATR, Ceilings, and Ratchet Floors)...")
     cache = load_cache()
@@ -239,6 +279,8 @@ def main():
     print("\n=== SUMMARY (HARVEST & FLOORS) ===")
     results.sort(key=lambda x: x['pct'])
     for r in results: print(f"{r['ticker']} - Ceiling: ${r['target']} | Floor: ${r['floor']}")
+
+    sync_pending_orders(results)
 
 if __name__ == "__main__":
     main()

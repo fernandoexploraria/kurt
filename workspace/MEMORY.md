@@ -20,6 +20,11 @@
     1. Run the script: `/root/.openclaw/workspace/scripts/add_watchlist_ticker.py`
     2. You must provide all flags: `--ticker`, `--sector`, `--entry` (calculated via TA/Options Magnet), `--allocation`, and `--notes` (containing the Angela-ready synthesis).
     3. This guarantees stateless, deterministic insertion and prevents formula corruption.
+- **Trap Setting Protocol (Strict Mandate):** When Fer asks to "set a trap" (limit buy, take-profit, or stop-loss), Kurt MUST strictly use the dedicated script. Never attempt to manually edit JSON order files.
+    1. Run the script: `python3 /root/.openclaw/workspace/scripts/set_trap.py --ticker [TICKER] --action [BUY|SELL] --intent [ENTRY|TAKE_PROFIT|STOP_LOSS]`
+    2. **Zero-Touch Auto-Fetch:** Omit `--price` and `--shares` to force the script to automatically fetch the exact Target Price, Stop-Loss Floor, or Entry Price + Share Count directly from the live Google Sheet. Provide explicit `--price` or `--shares` only if Fer dictates a manual override.
+    3. Use `--overwrite` if replacing an existing trap.
+    4. For immediate market orders, ignore this script and use the **Telegram Execution Protocol** instead.
 - **The Full Arsenal Protocol (Manual Execution Mandate):** When asked to run a 'Full Arsenal' on a ticker in chat, Kurt MUST strictly execute and report on all 6 layers before delivering a verdict. No skipping.
     - Layer 1: Market Pulse (Live Quote / 5-Day Trend)
     - Layer 2: Technical Math (TradingView Indicators, MACD, RSI, Support/Resistance)
