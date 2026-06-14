@@ -41,16 +41,33 @@ def save_cache(cache):
     with open(CACHE_FILE, 'w') as f:
         json.dump(cache, f, indent=2)
 
-def run_subprocess(cmd):
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+def run_subprocess(cmd_list):
+    """
+    UPGRADE P0-4: Executes an external command securely using list-based
+    arguments with shell=False to prevent shell injection [P0-4].
+    """
+    result = subprocess.run(cmd_list, shell=False, capture_output=True, text=True)
     if result.returncode != 0: return None
     return result.stdout.strip()
 
+def run_gog(args_list):
+    """
+    UPGRADE P0-4: Executes 'gog sheets' securely with an isolated environment map.
+    """
+    env = os.environ.copy()
+    env["GOG_ACCOUNT"] = ACCOUNT
+    cmd_list = ["gog", "sheets"] + args_list
+    result = subprocess.run(cmd_list, env=env, shell=False, capture_output=True, text=True)
+    if result.returncode != 0: return None
+    try:
+        return json.loads(result.stdout.strip())
+    except:
+        return None
+
 def get_total_equity():
-    cmd = f"GOG_ACCOUNT={ACCOUNT} gog sheets get {TEST_SHEET_ID} 'Positions!F3' --json"
-    out = run_subprocess(cmd)
+    out = run_gog(["get", TEST_SHEET_ID, "Positions!F3", "--json"])
     if not out: return 0.0
-    data = json.loads(out)
+    data = out
     try:
         val = data.get('values', [['0']])[0][0]
         return float(str(val).replace(',', '').replace('$', ''))
@@ -58,10 +75,9 @@ def get_total_equity():
         return 0.0
 
 def get_active_positions():
-    cmd = f"GOG_ACCOUNT={ACCOUNT} gog sheets get {TEST_SHEET_ID} 'Positions!A4:A50' --json"
-    out = run_subprocess(cmd)
+    out = run_gog(["get", TEST_SHEET_ID, "Positions!A4:A50", "--json"])
     if not out: return []
-    data = json.loads(out)
+    data = out
     tickers = []
     for row in data.get('values', []):
         if len(row) > 0 and row[0].strip() and row[0].strip() != "CASH":
@@ -142,10 +158,9 @@ def get_beta(ticker, cache):
     return 1.0
 
 def get_watchlist():
-    cmd = f"GOG_ACCOUNT={ACCOUNT} gog sheets get {TEST_SHEET_ID} 'Watchlist!A2:H50' --json"
-    out = run_subprocess(cmd)
+    out = run_gog(["get", TEST_SHEET_ID, "Watchlist!A2:H50", "--json"])
     if not out: return []
-    data = json.loads(out)
+    data = out
     tickers = []
     for i, row in enumerate(data.get('values', [])):
         if len(row) > 0 and row[0].strip() and row[0].strip().upper() != "TICKER":
@@ -342,11 +357,11 @@ def get_correlation_multiplier(candidate, active_positions):
 
 def update_sheet(row, entry_price, confidence_str, notes_str):
     today = datetime.now().strftime("%Y-%m-%d")
-    run_subprocess(f"GOG_ACCOUNT={ACCOUNT} gog sheets update {TEST_SHEET_ID} 'Watchlist!D{row}' --values-json '[[{entry_price}]]' --input USER_ENTERED")
-    run_subprocess(f"GOG_ACCOUNT={ACCOUNT} gog sheets update {TEST_SHEET_ID} 'Watchlist!E{row}' --values-json '[[\"=(C{row}-D{row})/D{row}\"]]' --input USER_ENTERED")
-    run_subprocess(f"GOG_ACCOUNT={ACCOUNT} gog sheets update {TEST_SHEET_ID} 'Watchlist!F{row}' --values-json '[[\"{confidence_str}\"]]' --input USER_ENTERED")
-    run_subprocess(f"GOG_ACCOUNT={ACCOUNT} gog sheets update {TEST_SHEET_ID} 'Watchlist!G{row}' --values-json '[[\"{notes_str}\"]]' --input USER_ENTERED")
-    run_subprocess(f"GOG_ACCOUNT={ACCOUNT} gog sheets update {TEST_SHEET_ID} 'Watchlist!I{row}' --values-json '[[\"{today}\"]]' --input USER_ENTERED")
+    run_gog(["update", TEST_SHEET_ID, f"Watchlist!D{row}", "--values-json", f"[[{entry_price}]]", "--input", "USER_ENTERED"])
+    run_gog(["update", TEST_SHEET_ID, f"Watchlist!E{row}", "--values-json", f'[[\"=(C{row}-D{row})/D{row}\"]]', "--input", "USER_ENTERED"])
+    run_gog(["update", TEST_SHEET_ID, f"Watchlist!F{row}", "--values-json", f'[["{confidence_str}"]]', "--input", "USER_ENTERED"])
+    run_gog(["update", TEST_SHEET_ID, f"Watchlist!G{row}", "--values-json", f'[["{notes_str}"]]', "--input", "USER_ENTERED"])
+    run_gog(["update", TEST_SHEET_ID, f"Watchlist!I{row}", "--values-json", f'[["{today}"]]', "--input", "USER_ENTERED"])
 
 def sync_pending_orders(new_targets):
     if not os.path.exists(ORDERS_FILE):
@@ -421,7 +436,7 @@ def main():
         if live_atr:
             atr = live_atr
             print(f"  [+] Live ATR Calculated: ${atr:.2f}")
-            run_subprocess(f"GOG_ACCOUNT={ACCOUNT} gog sheets update {TEST_SHEET_ID} 'Watchlist!H{row}' --values-json '[[{atr}]]' --input USER_ENTERED")
+            run_gog(["update", TEST_SHEET_ID, f"Watchlist!H{row}", "--values-json", f"[[{atr}]]", "--input", "USER_ENTERED"])
         else:
             atr = old_atr if old_atr > 0 else 1.0
             print(f"  [!] Failed to fetch Live ATR. Falling back to sheet/default value: ${atr:.2f}")

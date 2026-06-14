@@ -37,14 +37,23 @@ def save_json_atomic(data, path):
 def get_quiver_token():
     return os.environ.get("QUIVER_API_KEY")
 
-def run_subprocess(cmd):
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+def run_subprocess(cmd_list):
+    """
+    UPGRADE P0-4: Executes an external command securely using list-based
+    arguments with shell=False to prevent shell injection [P0-4].
+    """
+    result = subprocess.run(cmd_list, shell=False, capture_output=True, text=True)
     if result.returncode != 0:
         return None
     return result.stdout.strip()
 
 def get_dpi(ticker):
-    dpi_cmd = f"/root/.openclaw/workspace/quant_env/bin/python3 /root/.openclaw/workspace/skills/quiver-alpha/scripts/fetch.py darkpool {ticker}"
+    dpi_cmd = [
+        "/root/.openclaw/workspace/quant_env/bin/python3",
+        "/root/.openclaw/workspace/skills/quiver-alpha/scripts/fetch.py",
+        "darkpool",
+        ticker
+    ]
     dpi_out = run_subprocess(dpi_cmd)
     if dpi_out:
         try:
@@ -55,9 +64,17 @@ def get_dpi(ticker):
         except: pass
     return 0.5
 
-def run_gog(cmd):
-    full_cmd = f"GOG_ACCOUNT={ACCOUNT} gog sheets {cmd}"
-    result = subprocess.run(full_cmd, shell=True, capture_output=True, text=True)
+def run_gog(args_list):
+    """
+    UPGRADE P0-4: Executes 'gog sheets' securely with an isolated environment map,
+    preventing shell manipulation of environment variables [P0-4].
+    """
+    # Copy current OS environment variables and inject the target account
+    env = os.environ.copy()
+    env["GOG_ACCOUNT"] = ACCOUNT
+
+    cmd_list = ["gog", "sheets"] + args_list
+    result = subprocess.run(cmd_list, env=env, shell=False, capture_output=True, text=True)
     if result.returncode != 0:
         return None
     try:
@@ -152,7 +169,7 @@ def main():
         return
 
     print("Fetching Watchlist...")
-    watchlist_data = run_gog(f'get {LIVE_SHEET_ID} "Watchlist!A:K" --json')
+    watchlist_data = run_gog(["get", LIVE_SHEET_ID, "Watchlist!A:K", "--json"])
     if not watchlist_data or "values" not in watchlist_data:
         print("Failed to fetch watchlist.")
         return
@@ -168,7 +185,7 @@ def main():
     while len(header_row) < 10:
         header_row.append("")
     if header_row[9] != "Quiver Conviction":
-        run_gog(f"update {LIVE_SHEET_ID} \"Watchlist!J1\" --values-json '[[\"Quiver Conviction\"]]' --input USER_ENTERED")
+        run_gog(["update", LIVE_SHEET_ID, "Watchlist!J1", "--values-json", '[["Quiver Conviction"]]', "--input", "USER_ENTERED"])
 
     ninety_days_ago = datetime.now() - timedelta(days=90)
     fourteen_days_ago = datetime.now() - timedelta(days=14)
@@ -286,7 +303,7 @@ def main():
         
         payload = [[display_text]]
         safe_payload = json.dumps(payload)
-        run_gog(f"update {LIVE_SHEET_ID} \"Watchlist!J{row_idx}\" --values-json '{safe_payload}' --input USER_ENTERED")
+        run_gog(["update", LIVE_SHEET_ID, f"Watchlist!J{row_idx}", "--values-json", safe_payload, "--input", "USER_ENTERED"])
         
         # --- PATCH: API Throttling ---
         time.sleep(1.0)

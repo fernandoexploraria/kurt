@@ -52,19 +52,38 @@ def save_json_atomic(data, path):
     # 3. Perform an atomic replace of the old file with the complete new file
     os.replace(temp_path, path)
 
-def run_subprocess(cmd):
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+def run_subprocess(cmd_list):
+    """
+    UPGRADE P0-4: Executes an external command securely using list-based
+    arguments with shell=False to prevent shell injection [P0-4].
+    """
+    result = subprocess.run(cmd_list, shell=False, capture_output=True, text=True)
     if result.returncode != 0:
         return None
     return result.stdout.strip()
 
+def run_gog(args_list):
+    """
+    UPGRADE P0-4: Executes 'gog sheets' securely with an isolated environment map,
+    preventing shell manipulation of environment variables [P0-4].
+    """
+    env = os.environ.copy()
+    env["GOG_ACCOUNT"] = ACCOUNT
+
+    cmd_list = ["gog", "sheets"] + args_list
+    result = subprocess.run(cmd_list, env=env, shell=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        return None
+    try:
+        return json.loads(result.stdout.strip())
+    except:
+        return None
+
 def get_positions():
-    cmd = f"GOG_ACCOUNT={ACCOUNT} gog sheets get {TEST_SHEET_ID} 'Positions!A4:K50' --json"
-    out = run_subprocess(cmd)
+    out = run_gog(["get", TEST_SHEET_ID, "Positions!A4:K50", "--json"])
     if not out: return []
-    data = json.loads(out)
     active = []
-    for i, row in enumerate(data.get('values', [])):
+    for i, row in enumerate(out.get('values', [])):
         if len(row) >= 10:
             ticker = row[0].strip()
             if not ticker or ticker == "CASH" or ticker == "Ticker": continue
@@ -123,7 +142,7 @@ def main():
                 new_radar[ticker] = radar[ticker]
                 
                 old_drop = radar[ticker].get("trailing_drop_amount", 1.0)
-                run_subprocess(f"GOG_ACCOUNT={ACCOUNT} gog sheets update {TEST_SHEET_ID} 'Positions!L{row_num}' --values-json '[[{old_drop}]]' --input USER_ENTERED")
+                run_gog(["update", TEST_SHEET_ID, f"Positions!L{row_num}", "--values-json", f"[[{old_drop}]]", "--input", "USER_ENTERED"])
                 continue
             else:
                 print(f"  [!] New position {ticker} beta fetch failed. Defaulting to 1.05 to force-active safety stop.")
@@ -188,8 +207,8 @@ def main():
             
             # --- UNIFY SHEET AND RADAR FLOORS [P2-6] ---
             # Update the human dashboard: K gets the canonical floor, L gets the drop length
-            run_subprocess(f"GOG_ACCOUNT={ACCOUNT} gog sheets update {TEST_SHEET_ID} 'Positions!K{row_num}' --values-json '[[\"{current_floor}\"]]' --input USER_ENTERED")
-            run_subprocess(f"GOG_ACCOUNT={ACCOUNT} gog sheets update {TEST_SHEET_ID} 'Positions!L{row_num}' --values-json '[[\"{drop_amount}\"]]' --input USER_ENTERED")
+            run_gog(["update", TEST_SHEET_ID, f"Positions!K{row_num}", "--values-json", f'[["{current_floor}"]]', "--input", "USER_ENTERED"])
+            run_gog(["update", TEST_SHEET_ID, f"Positions!L{row_num}", "--values-json", f'[["{drop_amount}"]]', "--input", "USER_ENTERED"])
             
     save_json_atomic(new_radar, RADAR_FILE)
     print(f"\nRadar build complete. {len(new_radar)} high-beta targets saved to {RADAR_FILE}.")
