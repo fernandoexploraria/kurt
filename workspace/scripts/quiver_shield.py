@@ -4,10 +4,35 @@ import os
 import urllib.request
 import time
 from datetime import datetime, timedelta
+import tempfile
 
 LIVE_SHEET_ID = "1kjzfc6uEzBFtmNjlU1x3TVbHuWPgY7jnNce8mNTe66I"
 ACCOUNT = "fernando@exploraria.ai"
 SHIELD_FILE = "/root/.openclaw/workspace/memory/quiver_shield.json"
+
+SALE_WEIGHT = 0.5 # Asymmetric penalty multiplier for Congressional sales
+
+def save_json_atomic(data, path):
+    """
+    UPGRADE P0-6: Writes a JSON state file atomically using a temporary file
+    and os.replace to prevent file corruption during mid-write crashes.
+    """
+    dir_name = os.path.dirname(path)
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
+
+    # 1. Create a secure temp file in the same target folder
+    with tempfile.NamedTemporaryFile('w', dir=dir_name, delete=False) as tf:
+        temp_path = tf.name
+        json.dump(data, tf, indent=2)
+        tf.flush()
+        # 2. Force the OS to physically write the buffers to the storage drive
+        os.fsync(tf.fileno())
+
+    # Ensure the file is readable by other processes before replacing
+    os.chmod(temp_path, 0o644)
+    # 3. Perform an atomic replace of the old file with the complete new file
+    os.replace(temp_path, path)
 
 def get_quiver_token():
     return os.environ.get("QUIVER_API_KEY")
@@ -98,6 +123,28 @@ def count_recent_events(events, cutoff_date):
             pass
     return count
 
+def novelty_points(events, window_days, per_event_points, cap, cutoff_date):
+    """
+    UPGRADE P2-2: Calculates catalyst points by measuring recent activity
+    against a 1-year historical baseline to isolate true "new news" or novelty.
+    """
+    now = datetime.now()
+    one_year_ago = now - timedelta(days=365)
+
+    # 1. Count events in the short-term window and the full year
+    recent = count_recent_events(events, cutoff_date)
+    year_total = count_recent_events(events, one_year_ago)
+
+    # 2. Calculate the expected baseline frequency for the target window
+    baseline = year_total * (window_days / 365.0)
+
+    # 3. Isolate excess "novel" activity above the baseline
+    excess = max(0.0, recent - baseline)
+
+    # 4. Compute and cap the final score points
+    points = min(excess * per_event_points, cap)
+    return round(points, 2), recent
+
 def main():
     token = get_quiver_token()
     if not token:
@@ -142,6 +189,14 @@ def main():
         
         dpi = get_dpi(ticker)
         time.sleep(0.5)
+
+        # Sort trades descending by date to ensure the newest trade is processed first [P2-8]
+        def get_trade_date(t):
+            d_str = t.get("ReportDate") or t.get("TransactionDate") or "1970-01-01"
+            return d_str.split("T")[0]
+
+        if trades:
+            trades = sorted(trades, key=get_trade_date, reverse=True)
         
         # New Catalyst Fetches
         contracts = get_quiver_beta("govcontracts", ticker, token)
@@ -152,16 +207,12 @@ def main():
         
         patents = get_quiver_beta("allpatents", ticker, token)
         
-        # Apply specific lookback windows per dataset
-        recent_contracts = count_recent_events(contracts, ninety_days_ago) # 90 days
-        recent_lobbying = count_recent_events(lobbying, one_twenty_days_ago) # 120 days
-        recent_patents = count_recent_events(patents, fourteen_days_ago) # 14 days
+        # Calculate novelty-normalized catalyst points and extract raw counts [P2-2]
+        cat_contracts, recent_contracts = novelty_points(contracts, 90, 10, 50, ninety_days_ago)
+        cat_lobbying, recent_lobbying = novelty_points(lobbying, 120, 5, 25, one_twenty_days_ago)
+        cat_patents, recent_patents = novelty_points(patents, 14, 2, 10, fourteen_days_ago)
         
-        cat_contracts = recent_contracts * 10
-        cat_lobbying = recent_lobbying * 5
-        cat_patents = min(recent_patents * 2, 10) # Cap at 10 points
-        
-        catalyst_score = cat_contracts + cat_lobbying + cat_patents
+        catalyst_score = round(cat_contracts + cat_lobbying + cat_patents, 2)
         
         score = 50
         buys = 0
@@ -204,11 +255,13 @@ def main():
                     buys += 1
                     if buys == 1: latest_action = f"Bought by {rep}"
                 elif "Sale" in action:
-                    score -= points
+                    # Apply asymmetric 0.5x sale weight [P2-1]
+                    score -= (points * SALE_WEIGHT)
                     sells += 1
                     if sells == 1: latest_action = f"Sold by {rep}"
                     
-        score = max(0, min(100, score)) # Cap between 0 and 100
+        # Round the final score to 1 decimal place after applying float multipliers
+        score = round(max(0, min(100, score)), 1)
         
         if buys > 0 or sells > 0:
             macro_reasoning = f"Buys: {buys}, Sells: {sells} ({latest_action})"
@@ -239,9 +292,7 @@ def main():
         time.sleep(1.0)
 
     # Save local JSON cache for Sniper
-    os.makedirs(os.path.dirname(SHIELD_FILE), exist_ok=True)
-    with open(SHIELD_FILE, 'w') as f:
-        json.dump(shield_data, f, indent=2)
+    save_json_atomic(shield_data, SHIELD_FILE)
         
     print("\nQuiver Shield successfully built and synchronized!")
 
