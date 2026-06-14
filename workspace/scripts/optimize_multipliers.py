@@ -1,18 +1,22 @@
+#!/usr/bin/env python3
 import yfinance as yf
 import pandas as pd
 import json
 import os
 import subprocess
 import math
+import tempfile
 from datetime import datetime
 
-OUTPUT_FILE = "/root/.openclaw/workspace/memory/optimized_multipliers.json"
+MULTIPLIERS_FILE = "/root/.openclaw/workspace/memory/optimized_multipliers.json"
+ENTRIES_FILE = "/root/.openclaw/workspace/memory/optimized_entries.json"
 LIVE_SHEET_ID = "1kjzfc6uEzBFtmNjlU1x3TVbHuWPgY7jnNce8mNTe66I"
 ACCOUNT = "fernando@exploraria.ai"
 
 def run_gog(command):
-    full_cmd = f"GOG_ACCOUNT={ACCOUNT} gog sheets {command} --json"
-    result = subprocess.run(full_cmd, shell=True, capture_output=True, text=True)
+    full_cmd = ["gog", "sheets"] + command
+    env = {**os.environ, "GOG_ACCOUNT": ACCOUNT}
+    result = subprocess.run(full_cmd, shell=False, capture_output=True, text=True, env=env)
     if result.returncode == 0:
         try:
             return json.loads(result.stdout)
@@ -25,17 +29,17 @@ def get_master_universe():
     tickers = set()
 
     # Get Positions
-    pos_data = run_gog(f'get {LIVE_SHEET_ID} "Positions!A4:A100"')
+    pos_data = run_gog(["get", LIVE_SHEET_ID, "Positions!A4:A50", "--json"])
     if pos_data and "values" in pos_data:
         for row in pos_data["values"]:
-            if row and row[0].strip() and row[0].strip() != "CASH":
+            if row and row[0].strip() and row[0].strip() != "CASH" and row[0].strip().upper() != "TICKER":
                 tickers.add(row[0].strip())
 
     # Get Watchlist
-    watch_data = run_gog(f'get {LIVE_SHEET_ID} "Watchlist!A2:A100"')
+    watch_data = run_gog(["get", LIVE_SHEET_ID, "Watchlist!A2:A50", "--json"])
     if watch_data and "values" in watch_data:
         for row in watch_data["values"]:
-            if row and row[0].strip():
+            if row and row[0].strip() and row[0].strip().upper() != "TICKER":
                 tickers.add(row[0].strip())
 
     return list(tickers)
@@ -49,6 +53,24 @@ def calculate_rsi(data, periods=14):
     rsi = ma_up / ma_down
     rsi = 100 - (100/(1 + rsi))
     return rsi
+
+def save_json_atomic(data, path):
+    """
+    UPGRADE P0-6: Writes state files atomically using temporary files
+    and os.replace to prevent file truncation during mid-write crashes [P0-6].
+    """
+    dir_name = os.path.dirname(path)
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
+
+    with tempfile.NamedTemporaryFile('w', dir=dir_name, delete=False) as tf:
+        temp_path = tf.name
+        json.dump(data, tf, indent=2)
+        tf.flush()
+        os.fsync(tf.fileno())
+
+    os.chmod(temp_path, 0o644)
+    os.replace(temp_path, path)
 
 def backtest_strategy(df, m, strategy_name):
     in_position = False
@@ -156,34 +178,34 @@ def walk_forward_backtest(df, m, strategy_name, w_fit, rho):
     return final_oos_return, total_trades
 
 def main():
-    print(f"[{datetime.now().isoformat()}] Starting Weekly Quant Optimizer (Regime-Adaptive)...")
+    print(f"[{datetime.now().isoformat()}] Starting Weekly Joint Quant Optimizer (Regime-Adaptive)...")
 
     universe = get_master_universe()
     if not universe:
         print("Failed to pull universe. Exiting.")
-        return
+        return 1
 
     print(f"Found {len(universe)} unique tickers to optimize.\n")
 
-    # Sizing parameters and strategies to test
+    # Parameters and strategies to test
     multipliers_to_test = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
     strategies = ["RSI_30", "RSI_40", "EMA_50_Bounce", "EMA_200_Bounce", "Holy_Grail"]
 
     # --- TEMPORAL PARAMETER GRID ---
-    w_fit_grid = [126, 252, 378, 504] # 6m, 12m, 18m, 24m training windows (trading days)
-    rho_grid = [5, 6, 7, 9] # Corrected validation ratios (Minimum 2:1 up to 5:1)
+    w_fit_grid = [126, 252, 378, 504] # 6m, 12m, 18m, 24m training windows
+    rho_grid = [1, 2, 3, 4] # Validation ratios
 
     # Lightweight subset to ensure extremely fast Sunday execution
-    grid_strats = ["RSI_30", "EMA_50_Bounce", "Holy_Grail"]
+    grid_strats = ["RSI_30", "EMA_200_Bounce"]
     grid_mults = [2.0, 3.0]
 
-    optimized_results = {}
+    multipliers_results = {}
+    entries_results = {}
 
     for ticker in universe:
         print(f"Optimizing {ticker}...", end=" ", flush=True)
         try:
             yf_ticker = ticker.replace(".", "-")
-            # Download 5 years of daily data to ensure plenty of runway for rolling folds
             df = yf.download(yf_ticker, period="5y", progress=False)
             if df.empty:
                 print("Failed (No Data)")
@@ -196,13 +218,13 @@ def main():
             tr1 = df['High'] - df['Low']
             tr2 = abs(df['High'] - df['Prev_Close'])
             tr3 = abs(df['Low'] - df['Prev_Close'])
-            df['TR'] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-            df['ATR'] = df['TR'].rolling(window=14).mean()
+            df['ATR'] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            df['ATR'] = df['ATR'].rolling(window=14).mean()
             df['EMA_50'] = df['Close'].ewm(span=50, adjust=False).mean()
             df['EMA_200'] = df['Close'].ewm(span=200, adjust=False).mean()
             df['RSI'] = calculate_rsi(df)
 
-            # --- CRITICAL BUG FIX: Purge NaN warm-up window before grid search ---
+            # Purge NaN warm-up window before grid search
             df = df.dropna()
 
             # 1. GRID SEARCH OPTIMAL TEMPORAL WINDOWS
@@ -225,8 +247,10 @@ def main():
                                 best_w_fit = w_fit
                                 best_rho = rho
 
-            # 2. RUN FINAL OPTIMIZATION ON IDENTIFIED ROBUST BOUNDARIES
+            # 2. RUN JOINT OPTIMIZATION ON IDENTIFIED ROBUST BOUNDARIES [P1-1]
             best_w_val = int(best_w_fit / best_rho)
+            if best_w_val == 0:
+                best_w_val = 1
             df_train = df.iloc[:-best_w_val]
             df_val = df.iloc[-best_w_val:]
 
@@ -243,30 +267,52 @@ def main():
             for strat, m, t_ret in candidates:
                 v_ret, v_win, v_trades = backtest_strategy(df_val, m, strat)
                 if v_ret > 0: # Must survive validation out-of-sample
-                    robust_candidate = (strat, m)
+                    robust_candidate = (strat, m, v_ret, v_win, v_trades)
                     break
 
             if robust_candidate:
-                best_strat, best_m = robust_candidate
+                best_strat, best_m, val_ret, val_win, val_trades = robust_candidate
             else:
                 # If nothing survived validation, fall back to purely defensive default
-                best_strat, best_m = "None", 3.0
+                best_strat, best_m, val_ret, val_win, val_trades = "None", 3.0, 0.0, 0.0, 0
 
             best_return = -999.0
             if best_strat != "None":
                 best_return, _, _ = backtest_strategy(df, best_m, best_strat)
 
-            optimized_results[ticker] = best_m
+            # Store results for both files [P1-1]
+            multipliers_results[ticker] = best_m
+            entries_results[ticker] = {
+                "best_trigger": best_strat if best_strat != "None" else None,
+                "exit_multiplier_used": best_m,
+                "win_rate_pct": round(val_win, 2),
+                "total_return_pct": round(val_ret, 2),
+                "trades_executed": val_trades
+            }
+
             print(f"Window: IS {best_w_fit}d/OOS {best_w_val}d | Best: {best_m}x with {best_strat} ({best_return:.2f}%)")
 
         except Exception as e:
             print(f"Failed ({e})")
-            optimized_results[ticker] = 3.0
+            multipliers_results[ticker] = 3.0
+            entries_results[ticker] = {
+                "best_trigger": None,
+                "exit_multiplier_used": 3.0,
+                "win_rate_pct": 0.0,
+                "total_return_pct": 0.0,
+                "trades_executed": 0
+            }
 
-    with open(OUTPUT_FILE, 'w') as f:
-        json.dump(optimized_results, f, indent=2)
-
-    print(f"\nOptimization complete. Saved {len(optimized_results)} profiles to {OUTPUT_FILE}.")
+    # Save BOTH output files atomically [P1-1, P0-6]
+    try:
+        save_json_atomic(multipliers_results, MULTIPLIERS_FILE)
+        save_json_atomic(entries_results, ENTRIES_FILE)
+        print(f"\nJoint Optimization complete. Saved files atomically.")
+        return 0
+    except Exception as e:
+        print(f"\n🚨 FATAL: Atomic write failed: {e}")
+        return 1
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.exit(main())
