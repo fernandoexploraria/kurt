@@ -116,12 +116,16 @@ def get_macro_regime(active_positions):
     except Exception as e:
         print(f"  [!] Error fetching macro regime data: {e}")
         
-    regime_state = 1
-    if spy_sma200 > 0: # Ensure valid SPY data before applying logic
+    # UPGRADE P0-2: Fail-Closed Regime Initialization [P0-2]
+    regime_state = 2 # Default to conservative/Chop if data is missing or corrupted
+    
+    if spy_sma200 > 0: # Valid data check passed
         if (spy_close < spy_sma200) or (vix_close > 25) or (avg_portfolio_corr >= 0.50):
-            regime_state = 3
+            regime_state = 3 # Bear State
         elif (spy_close >= spy_sma200) and ((vix_close >= 20) or (avg_portfolio_corr >= 0.35)):
-            regime_state = 2
+            regime_state = 2 # Chop State
+        else:
+            regime_state = 1 # Only upgrade to Bull if all healthy conditions are met [P0-2]
             
     return regime_state, spy_close, spy_sma200, vix_close, avg_portfolio_corr
 
