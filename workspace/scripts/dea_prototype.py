@@ -100,12 +100,6 @@ def main():
     X_raw = np.array([d["inputs"] for d in dmus], dtype=float)
     Y_raw = np.array([d["outputs"] for d in dmus], dtype=float)
 
-    # Translation to handle negative outputs (mathematically valid in BCC)
-    for c in range(Y_raw.shape[1]):
-        col_min = np.min(Y_raw[:, c])
-        if col_min <= 0:
-            Y_raw[:, c] = Y_raw[:, c] - col_min + 1.0
-
     # Add a tiny epsilon to prevent LP singular matrices or division-by-zero
     X_raw[X_raw == 0] = 0.01
     Y_raw[Y_raw == 0] = 0.01
@@ -114,40 +108,68 @@ def main():
     X_norm = X_raw / X_raw.max(axis=0)
     Y_norm = Y_raw / Y_raw.max(axis=0)
 
+    # Calculate global ranges on the NORMALIZED coordinates to prevent scaling distortions
+    Rx = np.ptp(X_norm, axis=0)
+    Rx[Rx == 0] = 1.0  # Prevent division by zero
+    Ry = np.ptp(Y_norm, axis=0)
+    Ry[Ry == 0] = 1.0
+
     n_inputs = X_norm.shape[1]
     n_outputs = Y_norm.shape[1]
 
-    print("Running DEA (BCC Input-Oriented Multiplier Model)...")
+    print("Running DEA (RDM/Directional Distance with Cross-Efficiency)...")
 
     eps = 1e-6
-    for o in range(n_dmus):
-        # We want to maximize sum(u_r * y_ro) - u_0, which is equivalent to
-        # minimizing -sum(u_r * y_ro) + u_0.
-        # Variable vector structure: w = [u_1,..., u_s, v_1,..., v_m, u_0]
-        c = np.concatenate([-Y_norm[o], np.zeros(n_inputs), [1.0]])
+    Weights = np.zeros((n_dmus, n_inputs + n_outputs + 1))
 
-        # Equality constraint: sum(v_i * x_io) = 1
-        # In matrix: [0,..., 0, x_1o,..., x_mo, 0] * w = 1
-        A_eq = np.concatenate([np.zeros(n_outputs), X_norm[o], [0.0]]).reshape(1, -1)
+    # Phase 1: Self-Evaluation (Solve LP for each DMU using normalized coordinates)
+    for o in range(n_dmus):
+        # Objective: Minimize inefficiency beta = sum(v*x_o) - sum(u*y_o) + u_0 on normalized data
+        c = np.concatenate([X_norm[o], -Y_norm[o], [1.0]])
+
+        # Equality constraint: sum(v*Rx) + sum(u*Ry) = 1 (Normalizes weights globally)
+        A_eq = np.concatenate([Rx, Ry, [0.0]]).reshape(1, -1)
         b_eq = [1.0]
 
-        # Inequality constraint: sum(u_r * y_rj) - sum(v_i * x_ij) - u_0 <= 0
-        # In matrix: [Y_norm, -X_norm, -1] * w <= 0
+        # Inequality constraint: sum(v*x_j) - sum(u*y_j) + u_0 >= 0 for all j
+        # Scipy linprog uses A_ub * w <= b_ub, so multiply by -1:
+        # -sum(v*x_j) + sum(u*y_j) - u_0 <= 0
         u0_col = -np.ones((n_dmus, 1))
-        A_ub = np.hstack([Y_norm, -X_norm, u0_col])
+        A_ub = np.hstack([-X_norm, Y_norm, u0_col])
         b_ub = np.zeros(n_dmus)
 
-        # Bounds: u_r >= eps, v_i >= eps, u_0 is free (None, None)
-        bounds = [(eps, None)] * (n_outputs + n_inputs) + [(None, None)]
+        # Bounds: v_i >= eps, u_r >= eps, u_0 is free
+        bounds = [(eps, None)] * (n_inputs + n_outputs) + [(None, None)]
 
         res = linprog(c, A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method='highs')
 
         if res.success:
-            # Optimal score is the negative of the minimized objective value
-            score = -res.fun
-            dmus[o]["dea_score"] = max(0.0, min(1.0, score))
+            Weights[o, :] = res.x
+            dmus[o]["self_score"] = max(0.0, 1.0 - res.fun)
         else:
-            dmus[o]["dea_score"] = 0.0
+            Weights[o, :] = 0
+            dmus[o]["self_score"] = 0.0
+
+    # Phase 2: Cross-Efficiency Matrix (Evaluated on normalized coordinates)
+    print("Calculating Cross-Efficiency Peer Evaluation Matrix...")
+    CE_matrix = np.zeros((n_dmus, n_dmus))
+
+    for o in range(n_dmus):
+        v = Weights[o, :n_inputs]
+        u = Weights[o, n_inputs:n_inputs+n_outputs]
+        u0 = Weights[o, -1]
+        
+        for j in range(n_dmus):
+            # Inefficiency of DMU j evaluated using DMU o's optimal weights
+            inefficiency = np.dot(X_norm[j], v) - np.dot(Y_norm[j], u) + u0
+            # Cross-Efficiency score clipped to a minimum of 0.0 [P0-8]
+            CE_matrix[o, j] = max(0.0, 1.0 - inefficiency)
+
+    # Phase 3: Aggregate Cross-Efficiency
+    for j in range(n_dmus):
+        # Average of how all peers scored DMU j
+        avg_ce = np.mean(CE_matrix[:, j])
+        dmus[j]["dea_score"] = max(0.0, min(1.0, avg_ce))
 
     # Prepare batch update for Column K (Watchlist!K)
     k_column = [[""] for _ in range(len(rows))]
