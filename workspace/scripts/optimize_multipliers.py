@@ -13,6 +13,10 @@ ENTRIES_FILE = "/root/.openclaw/workspace/memory/optimized_entries.json"
 LIVE_SHEET_ID = "1kjzfc6uEzBFtmNjlU1x3TVbHuWPgY7jnNce8mNTe66I"
 ACCOUNT = "fernando@exploraria.ai"
 
+# --- CONFIGURATION: TRANSACTION FEES & SLIPPAGE ---
+# 5 bps (0.05%) per side = 10 bps (0.10%) round-trip fee-and-slippage penalty
+COST_PER_SIDE = 0.0005
+
 def run_gog(command):
     full_cmd = ["gog", "sheets"] + command
     env = {**os.environ, "GOG_ACCOUNT": ACCOUNT}
@@ -125,13 +129,19 @@ def backtest_strategy(df, m, strategy_name):
                 in_position = False
                 wait_for_reset = True
                 exit_price = open_price if open_price < trailing_floor else trailing_floor
-                trade_return = (exit_price - entry_price) / entry_price
+
+                # --- MATHEMATICAL ADJUSTMENT: Deduct round-trip friction costs ---
+                trade_return = ((exit_price - entry_price) / entry_price) - (2 * COST_PER_SIDE)
                 total_compound_return *= (1 + trade_return)
+
+                # A trade is counted as a "win" ONLY if it is net-profitable after fees
                 if trade_return > 0: wins += 1
 
     if in_position:
         end_price = float(df['Close'].iloc[-1])
-        trade_return = (end_price - entry_price) / entry_price
+
+        # --- MATHEMATICAL ADJUSTMENT: Deduct final liquidation friction costs ---
+        trade_return = ((end_price - entry_price) / entry_price) - (2 * COST_PER_SIDE)
         total_compound_return *= (1 + trade_return)
         if trade_return > 0: wins += 1
 
@@ -193,7 +203,7 @@ def main():
 
     # --- TEMPORAL PARAMETER GRID ---
     w_fit_grid = [126, 252, 378, 504] # 6m, 12m, 18m, 24m training windows
-    rho_grid = [1, 2, 3, 4] # Validation ratios
+    rho_grid = [3, 4, 5, 8] # Corrected validation ratios (Minimum 3:1 up to 8:1)
 
     # Lightweight subset to ensure extremely fast Sunday execution
     grid_strats = ["RSI_30", "EMA_200_Bounce"]
