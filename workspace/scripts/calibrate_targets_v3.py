@@ -15,6 +15,8 @@ RAPIDAPI_HOST = "tradingview-data1.p.rapidapi.com"
 CACHE_FILE = "/root/.openclaw/workspace/memory/exchange_cache.json"
 ORDERS_FILE = "/root/.openclaw/workspace/memory/pending_orders.json"
 
+DEFAULT_ATR_MULTIPLIER = 3.0 # Standardized fallback multiplier for unoptimized assets [P0-5]
+
 def load_cache():
     if os.path.exists(CACHE_FILE):
         try:
@@ -256,7 +258,8 @@ def main():
             target_price = round(current_price + atr, 2)
             
         # PHASE 2: THE RATCHET FLOOR LOGIC
-        multiplier = optimized_multipliers.get(ticker, 2.0)
+        # Unified fallback multiplier to prevent dashboard and radar stop-loss drift [P0-5]
+        multiplier = optimized_multipliers.get(ticker, DEFAULT_ATR_MULTIPLIER)
         print(f"  [+] Optimizer Brain: Using {multiplier}x ATR multiplier for Floor.")
         theoretical_floor = round(current_price - (multiplier * atr), 2)
         if theoretical_floor < 0: theoretical_floor = 0.0

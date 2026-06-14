@@ -368,30 +368,92 @@ def update_sheet(row, entry_price, confidence_str, notes_str):
     run_gog(["update", TEST_SHEET_ID, f"Watchlist!I{row}", "--values-json", f'[["{today}"]]', "--input", "USER_ENTERED"])
 
 def sync_pending_orders(new_targets):
+    """
+    UPGRADE P0-3: Synchronizes target prices and share counts of pending limit traps.
+    Suspends orders if calibrated size is 0 or if the ticker was removed from the watchlist.
+    Saves updates atomically to prevent file corruption [P0-3, P0-6].
+    """
     if not os.path.exists(ORDERS_FILE):
         return
     try:
         with open(ORDERS_FILE, 'r') as f:
             orders = json.load(f)
-    except:
+    except Exception as e:
+        print(f"  [!] Failed to load pending orders cache: {e}")
         return
-        
+
     updated = False
     print("\n=== SYNCHRONIZING LIMIT SNIPER TRAPS ===")
+
     for ticker, data in orders.items():
-        if data.get("status") == "waiting" and data.get("action") == "BUY":
+        action = data.get("action", "BUY")
+        status = data.get("status")
+
+        # We only synchronize and manage active BUY orders
+        if action == "BUY":
             if ticker in new_targets:
-                old_price = data.get("target_price")
-                new_price = new_targets[ticker]
-                if old_price != new_price:
-                    print(f"  [Sync] Updating {ticker} Trap: ${old_price} -> ${new_price}")
-                    data["target_price"] = new_price
+                target_info = new_targets[ticker]
+                target_price = target_info["price"]
+                target_shares = target_info["shares"]
+
+                if target_shares == 0:
+                    # Suspend the order if our regime/correlation sizing is 0
+                    if status != "suspended":
+                        print(f"  Suspending {ticker} Trap: Calibrated size is 0.")
+                        data["status"] = "suspended"
+                        data["suspend_reason"] = "Calibrated size is 0 (Regime Lockdown)"
+                        updated = True
+                else:
+                    # Order has valid positive shares
+                    old_price = data.get("target_price")
+                    old_shares = data.get("shares")
+
+                    # Re-arm the order if it was previously suspended
+                    if status == "suspended":
+                        print(f"  Re-arming {ticker} Trap (Status: waiting).")
+                        data["status"] = "waiting"
+                        if "suspend_reason" in data:
+                            del data["suspend_reason"]
+                        updated = True
+
+                    # Sync calculated price
+                    if old_price != target_price:
+                        print(f"  Updating {ticker} Trap Price: ${old_price} -> ${target_price}")
+                        data["target_price"] = target_price
+                        updated = True
+
+                    # Sync calculated share size
+                    if old_shares != target_shares:
+                        print(f"  Updating {ticker} Trap Shares: {old_shares} -> {target_shares}")
+                        data["shares"] = target_shares
+                        updated = True
+            else:
+                # Ticker is in active traps but was removed from Google Sheets Watchlist [P0-3]
+                if status == "waiting":
+                    print(f"  Suspending {ticker} Trap: Ticker removed from Watchlist.")
+                    data["status"] = "suspended"
+                    data["suspend_reason"] = "Removed from Watchlist"
                     updated = True
-                    
+
     if updated:
-        with open(ORDERS_FILE, 'w') as f:
-            json.dump(orders, f, indent=2)
-        print("  [✓] All pending traps synchronized successfully.")
+        # Save atomically using our secure temp-file replace pattern [P0-6]
+        import tempfile
+        dir_name = os.path.dirname(ORDERS_FILE)
+        os.makedirs(dir_name, exist_ok=True)
+        try:
+            with tempfile.NamedTemporaryFile('w', dir=dir_name, delete=False) as tf:
+                temp_path = tf.name
+                json.dump(orders, tf, indent=2)
+                tf.flush()
+                os.fsync(tf.fileno())
+            os.chmod(temp_path, 0o644)
+            os.replace(temp_path, ORDERS_FILE)
+            print("  [✓] All pending traps synchronized and saved atomically.")
+        except Exception as e:
+            # Safe non-atomic write fallback if directory permissions block temp writes
+            with open(ORDERS_FILE, 'w') as f:
+                json.dump(orders, f, indent=2)
+            print(f"  [!] Synchronized traps saved (non-atomic fallback due to: {e})")
     else:
         print("  [-] No waiting traps required updating.")
 
@@ -558,7 +620,11 @@ def main():
         
         update_sheet(row, target_entry, confidence_str, notes_str)
         
-        new_targets[ticker] = target_entry
+        # Store both price and shares to sync to pending traps [P0-3]
+        new_targets[ticker] = {
+            "price": target_entry,
+            "shares": target_shares
+        }
         pct_to_entry = ((current_price - target_entry) / target_entry) * 100 if target_entry > 0 else 999
         results.append({"ticker": ticker, "entry": target_entry, "pct": pct_to_entry})
 
