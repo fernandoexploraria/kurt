@@ -137,7 +137,7 @@ def get_macro_regime(active_positions):
     avg_portfolio_corr = 0.0
     spy_above_3d = False
     spy_below_3d = False
-    
+
     try:
         df_macro = yf.download(["SPY", "^VIX"], period="1y", progress=False)['Close']
         if not df_macro.empty:
@@ -164,7 +164,7 @@ def get_macro_regime(active_positions):
                 vix_series = df_macro["^VIX"].dropna()
                 if not vix_series.empty:
                     vix_close = vix_series.iloc[-1]
-        
+
         if active_positions and len(active_positions) > 1:
             yf_active = [p.replace(".", "-") for p in active_positions]
             df_port = yf.download(yf_active, period="90d", progress=False)['Close']
@@ -176,7 +176,7 @@ def get_macro_regime(active_positions):
                     avg_portfolio_corr = float(avg_val)
     except Exception as e:
         print(f"  [!] Error fetching macro regime data: {e}")
-        
+
     # Load yesterday's state to process transitions [P2-9]
     prev_state_data = load_regime_state()
     prev_state = prev_state_data.get("last_state", 2)  # Fail-closed default is State 2
@@ -277,7 +277,7 @@ def get_watchlist():
             if len(row) > 7 and row[7].strip():
                 try: atr = float(str(row[7]).replace(',', '').replace('$', ''))
                 except: pass
-            
+
             tickers.append({"row": i + 2, "ticker": row[0].strip(), "price": price, "atr": atr})
     return tickers
 
@@ -298,7 +298,7 @@ def get_ta_floor(ticker, cache, strategy=None):
                     cache[ticker] = prefix
                     save_cache(cache)
                 ind = res["data"]
-                
+
                 # --- STRATEGY TRANSLATION ENGINE ---
                 if strategy == "EMA_50_Bounce" and ind.get("EMA50"):
                     return ind["EMA50"]
@@ -308,7 +308,7 @@ def get_ta_floor(ticker, cache, strategy=None):
                     return ind["Pivot.M.Classic.S1"]
                 elif strategy == "RSI_30" and ind.get("Pivot.M.Classic.S2"):
                     return ind["Pivot.M.Classic.S2"]
-                
+
                 # Fallback if specific strategy indicator fails or strategy is None
                 if ind.get("EMA200"): return ind["EMA200"]
                 elif ind.get("Pivot.M.Classic.S1"): return ind["Pivot.M.Classic.S1"]
@@ -344,7 +344,7 @@ def get_atr(ticker, cache):
 
     headers = {"x-rapidapi-key": RAPIDAPI_KEY, "x-rapidapi-host": RAPIDAPI_HOST}
     hist = None
-    
+
     for prefix in prefixes:
         url = f"https://{RAPIDAPI_HOST}/api/price/{prefix}{ticker}?range=16&timeframe=D"
         try:
@@ -357,7 +357,7 @@ def get_atr(ticker, cache):
                 break
         except: pass
         time.sleep(0.2)
-        
+
     if hist and len(hist) > 1:
         trs = []
         for j in range(1, len(hist)):
@@ -366,16 +366,16 @@ def get_atr(ticker, cache):
             pc = hist[j-1]["close"]
             tr = max(h - l, abs(h - pc), abs(l - pc))
             trs.append(tr)
-        
+
         atr = sum(trs[-14:]) / min(14, len(trs))
         return round(atr, 2)
-        
+
     return None
 
 def get_quiver_adjustments(ticker, shield_cache):
-    modifier = 1.0 
+    modifier = 1.0
     shield_data = shield_cache.get(ticker, {})
-    
+
     # 1. Dark Pool Index (DPI) Adjustments
     latest_dpi = shield_data.get("dpi", 0.5)
     if latest_dpi > 0.50:
@@ -385,11 +385,11 @@ def get_quiver_adjustments(ticker, shield_cache):
     # 2. Congressional Conviction Score Adjustments (Volume-Weighted)
     score = shield_data.get("score", 50)
     if score != 50:
-        # Scale: (Score - 50) * 0.002. 
+        # Scale: (Score - 50) * 0.002.
         # Score 100 -> +0.10 boost. Score 0 -> -0.10 discount.
         boost = (score - 50) * 0.002
         modifier += boost
-        
+
     return modifier
 
 def get_correlation_multiplier(candidate, active_positions):
@@ -565,13 +565,13 @@ def main():
 
     # Load cached DEA scores
     dea_cache = load_dea_scores()
-    
+
     total_equity = get_total_equity()
     print(f"[i] Live Portfolio Total Equity: ${total_equity:,.2f}")
-    
+
     active_positions = get_active_positions()
     print(f"[i] Active Positions Found: {len(active_positions)}")
-    
+
     # --- PHASE 1: SYSTEMIC MACRO REGIME DETERMINATION ---
     regime_state, spy_close, spy_sma200, vix_close, avg_portfolio_corr = get_macro_regime(active_positions)
     print(f"[i] Macro Regime State: {regime_state} | SPY: ${spy_close:.2f} (SMA200: ${spy_sma200:.2f}) | VIX: {vix_close:.2f} | Avg Corr: {avg_portfolio_corr:.2f}")
@@ -592,7 +592,7 @@ def main():
     for item in tickers:
         ticker, row, current_price, old_atr = item['ticker'], item['row'], item['price'], item['atr']
         print(f"\n--- {ticker} ---")
-        
+
         # Determine Optimized Strategy
         opt = optimized_entries.get(ticker, {})
         strategy = opt.get("best_trigger", None)
@@ -600,7 +600,7 @@ def main():
             print(f"  [+] Optimizer Brain: Engaged (Strategy: {strategy})")
         else:
             print(f"  [!] No Optimized Strategy Found. Using fallbacks.")
-            
+
         # --- PHASE 3: FETCH AND WRITE LIVE ATR ---
         live_atr = get_atr(ticker, cache)
         if live_atr:
@@ -610,9 +610,9 @@ def main():
         else:
             atr = old_atr if old_atr > 0 else 1.0
             print(f"  [!] Failed to fetch Live ATR. Falling back to sheet/default value: ${atr:.2f}")
-            
+
         base_floor = get_ta_floor(ticker, cache, strategy)
-        if base_floor: 
+        if base_floor:
             print(f"  [+] Found TA Structural Floor: ${base_floor:.2f}")
         else:
             low_52w = get_52w_low(ticker, cache)
@@ -622,10 +622,10 @@ def main():
             else:
                 print(f"  [!] Absolute failure. Falling back to Current Price - 2x ATR.")
                 base_floor = current_price - (2 * atr)
-        
+
         modifier = get_quiver_adjustments(ticker, shield_cache)
         target_entry = round(base_floor * modifier, 2)
-        
+
         if current_price > 0 and target_entry > (current_price - atr):
             sanity_target = current_price - atr
             # The ABTS negative price fix:
@@ -633,16 +633,16 @@ def main():
                 sanity_target = current_price * 0.50 # Hard limit a 50% drop if ATR math breaks
             print(f"  [!] Sanity Check: Entry too close. Forcing -1 ATR discount (${sanity_target:.2f}).")
             target_entry = round(sanity_target, 2)
-            
+
         print(f"  [=] FINAL SNIPER ENTRY: ${target_entry}")
-        
+
         # --- PHASE 4: DYNAMIC POSITION SIZING (RISK PARITY & CORRELATION) ---
         m = opt.get("exit_multiplier_used", 3.0)
-        
+
         # Catalyst Multiplier Integration
         shield_data = shield_cache.get(ticker, {})
         catalyst_score = shield_data.get("catalyst_score", 0)
-        
+
         if catalyst_score >= 50:
             catalyst_multiplier = 1.50
             sizing_note = f"🚀 1.5x Sizing: Monumental Catalyst ({catalyst_score} pts)"
@@ -653,20 +653,17 @@ def main():
             catalyst_multiplier = 1.00
             sizing_note = "Standard Sizing"
 
-        # --- PHASE 4.1: DEA FRONTIER SIZING GATE [, S_R15] ---
+        # --- PHASE 4.1: DEA FRONTIER SIZING GATE ---
         dea_multiplier = 1.00
-
         if ticker in dea_cache:
             # Re-scale from 0.0-1.0 float back to a 100% display scale
             dea_score = float(dea_cache[ticker].get("dea_score", 1.0)) * 100.0
 
             if dea_score >= 100.0:
-                # 1. Frontier Sizing Boost (Aggressive allocation for optimal assets) [, S_R15]
                 dea_multiplier = 1.25
                 if sizing_note == "Standard Sizing": sizing_note = ""
                 sizing_note += f" | 🎯 1.25x DEA Frontier Boost"
             elif dea_score < 80.0:
-                # 2. Inefficiency Lockout (Block assets that fall in the "mushy middle") [, S_R15]
                 dea_multiplier = 0.00
                 if sizing_note == "Standard Sizing": sizing_note = ""
                 sizing_note += f" | 🛑 Lockout: Inefficient DEA ({dea_score:.1f}%)"
@@ -675,7 +672,7 @@ def main():
         # --- PATH B: MULTI-STATE REGIME SIZING ---
         beta = get_beta(ticker, cache)
         regime_multiplier = 1.00
-        
+
         if regime_state == 2:
             if beta >= 1.05:
                 regime_multiplier = 0.50 # Squeeze growth plays during chop
@@ -690,31 +687,41 @@ def main():
                 regime_multiplier = 0.50 # Scale back defensive buys
                 if sizing_note == "Standard Sizing": sizing_note = ""
                 sizing_note += " | 🛡️ Bear Regime: 0.5x Defensive Scaling"
-                
-        # UPGRADE : Scale total risk under joint catalyst, regime, and frontier parameters
+
+        # Scale total risk under joint catalyst, regime, and frontier parameters
         scaled_risk_pct = 0.01 * catalyst_multiplier * regime_multiplier * dea_multiplier
         risk_dollar_amount = total_equity * scaled_risk_pct
-        
+
+        # 1. Calculate base risk-parity shares (if risk percentage is active)
         target_shares = 0
-        # Prevent calculation if any active filter has zeroed out the risk percentage
         if target_entry > 0 and atr > 0 and m > 0 and scaled_risk_pct > 0:
             target_shares = math.floor(risk_dollar_amount / (atr * m))
-            
-        # The 'At Least One' Override
-        # Ensure that overrides never fire when risk-zero conditions are active
-        if target_shares == 0 and total_equity >= target_entry and target_entry > 0 and scaled_risk_pct > 0:
-            target_shares = 1
-            
-        # --- UPGRADE B INTEGRATION: Dual-Engine Correlation Sizing ---
+
+        # 2. Fetch and apply Dual-Engine Correlation multiplier
         corr_multiplier, highly_correlated_ticker, trigger_reason = get_correlation_multiplier(ticker, active_positions)
-        
         if corr_multiplier < 1.0 and scaled_risk_pct > 0:
             target_shares = math.floor(target_shares * corr_multiplier)
-            if target_shares == 0 and total_equity >= target_entry and target_entry > 0:
-                target_shares = 1 
-                
-        # Advisor Note: The Capital Outlay Cap
-        max_capital_allowed = total_equity * 0.10 # Max 10% of portfolio equity in physical cash outlay
+
+        # 3. UPGRADE P2-5: Re-Scoped 'At Least One' Sizing Override
+        # Only override to 1 share if:
+        # - Calculated shares fell to 0
+        # - We have positive active risk (scaled_risk_pct > 0)
+        # - The combined penalty multiplier (regime * correlation) is relatively safe (>= 0.5)
+        # - The cost of a single share (target_entry) is less than 2x the allocated risk-dollar budget
+        combined_penalty = regime_multiplier * corr_multiplier
+        if (target_shares == 0 and
+            total_equity >= target_entry and
+            target_entry > 0 and
+            scaled_risk_pct > 0 and
+            combined_penalty >= 0.5 and
+            target_entry < (2.0 * risk_dollar_amount)):
+
+            target_shares = 1
+            if sizing_note == "Standard Sizing": sizing_note = ""
+            sizing_note += " | 🛡️ 1-Share Override Active"
+
+        # 4. Enforce the Capital Outlay Cap (Max 10% of total equity)
+        max_capital_allowed = total_equity * 0.10
         position_cost = target_shares * target_entry
 
         if position_cost > max_capital_allowed:
@@ -742,9 +749,9 @@ def main():
                 if sizing_note != "Standard Sizing" and sizing_note != "":
                      notes_str += f" {sizing_note}"
                 print(f"  [+] Dynamic Sizing: {confidence_str} | {notes_str} (Multiplier: {m}x)")
-        
+
         update_sheet(row, target_entry, confidence_str, notes_str)
-        
+
         # Store both price and shares to sync to pending traps [P0-3]
         new_targets[ticker] = {
             "price": target_entry,
@@ -756,7 +763,7 @@ def main():
     print("\n=== TOP 3 ACTIONABLE (IMMINENT ENTRIES) ===")
     results.sort(key=lambda x: x['pct'])
     for r in results[:3]: print(f"{r['ticker']} - Entry: ${r['entry']} ({r['pct']:.2f}% away)")
-    
+
     sync_pending_orders(new_targets)
 
 if __name__ == "__main__":
