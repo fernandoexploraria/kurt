@@ -20,6 +20,10 @@ RAPIDAPI_HOST = "tradingview-data1.p.rapidapi.com"
 CACHE_FILE = "/root/.openclaw/workspace/memory/exchange_cache.json"
 SHIELD_FILE = "/root/.openclaw/workspace/memory/quiver_shield.json"
 ORDERS_FILE = "/root/.openclaw/workspace/memory/pending_orders.json"
+REGIME_STATE_FILE = "/root/.openclaw/workspace/memory/regime_state.json"
+
+# --- NEW CONFIGURATION: DEA SCORES CACHE ---
+DEA_SCORES_FILE = "/root/.openclaw/workspace/memory/dea_scores.json"
 
 def load_shield():
     if os.path.exists(SHIELD_FILE):
@@ -33,6 +37,15 @@ def load_cache():
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, 'r') as f:
+                return json.load(f)
+        except: pass
+    return {}
+
+def load_dea_scores():
+    """UPGRADE S_R15: Safely loads the cached morning DEA efficiency scores."""
+    if os.path.exists(DEA_SCORES_FILE):
+        try:
+            with open(DEA_SCORES_FILE, 'r') as f:
                 return json.load(f)
         except: pass
     return {}
@@ -104,11 +117,11 @@ def get_total_equity():
         return 0.0
 
 def get_active_positions():
+    """UPGRADE P0-4: Securely retrieves active positions via list-based run_gog."""
     out = run_gog(["get", TEST_SHEET_ID, "Positions!A4:A50", "--json"])
-    if not out: return []
-    data = out
+    if not out or "values" not in out: return []
     tickers = []
-    for row in data.get('values', []):
+    for row in out.get('values', []):
         if len(row) > 0 and row[0].strip() and row[0].strip() != "CASH":
             tickers.append(row[0].strip())
     return tickers
@@ -485,7 +498,7 @@ def sync_pending_orders(new_targets):
                 target_shares = target_info["shares"]
 
                 if target_shares == 0:
-                    # Suspend the order if our regime/correlation sizing is 0
+                    # Suspend the order if our regime/correlation/DEA sizing is 0
                     if status != "suspended":
                         print(f"  Suspending {ticker} Trap: Calibrated size is 0.")
                         data["status"] = "suspended"
@@ -549,6 +562,9 @@ def main():
     print("Starting V7 Watchlist Calibration (Unified & Secured)...")
     cache = load_cache()
     shield_cache = load_shield()
+
+    # Load cached DEA scores
+    dea_cache = load_dea_scores()
     
     total_equity = get_total_equity()
     print(f"[i] Live Portfolio Total Equity: ${total_equity:,.2f}")
@@ -623,7 +639,7 @@ def main():
         # --- PHASE 4: DYNAMIC POSITION SIZING (RISK PARITY & CORRELATION) ---
         m = opt.get("exit_multiplier_used", 3.0)
         
-        # Advisor Note: Catalyst Multiplier Integration
+        # Catalyst Multiplier Integration
         shield_data = shield_cache.get(ticker, {})
         catalyst_score = shield_data.get("catalyst_score", 0)
         
@@ -636,7 +652,25 @@ def main():
         else:
             catalyst_multiplier = 1.00
             sizing_note = "Standard Sizing"
-            
+
+        # --- PHASE 4.1: DEA FRONTIER SIZING GATE [, S_R15] ---
+        dea_multiplier = 1.00
+
+        if ticker in dea_cache:
+            # Re-scale from 0.0-1.0 float back to a 100% display scale
+            dea_score = float(dea_cache[ticker].get("dea_score", 1.0)) * 100.0
+
+            if dea_score >= 100.0:
+                # 1. Frontier Sizing Boost (Aggressive allocation for optimal assets) [, S_R15]
+                dea_multiplier = 1.25
+                if sizing_note == "Standard Sizing": sizing_note = ""
+                sizing_note += f" | 🎯 1.25x DEA Frontier Boost"
+            elif dea_score < 80.0:
+                # 2. Inefficiency Lockout (Block assets that fall in the "mushy middle") [, S_R15]
+                dea_multiplier = 0.00
+                if sizing_note == "Standard Sizing": sizing_note = ""
+                sizing_note += f" | 🛑 Lockout: Inefficient DEA ({dea_score:.1f}%)"
+
         # Scale the At-Risk Capital
         # --- PATH B: MULTI-STATE REGIME SIZING ---
         beta = get_beta(ticker, cache)
@@ -657,21 +691,24 @@ def main():
                 if sizing_note == "Standard Sizing": sizing_note = ""
                 sizing_note += " | 🛡️ Bear Regime: 0.5x Defensive Scaling"
                 
-        scaled_risk_pct = 0.01 * catalyst_multiplier * regime_multiplier
+        # UPGRADE : Scale total risk under joint catalyst, regime, and frontier parameters
+        scaled_risk_pct = 0.01 * catalyst_multiplier * regime_multiplier * dea_multiplier
         risk_dollar_amount = total_equity * scaled_risk_pct
         
         target_shares = 0
-        if target_entry > 0 and atr > 0 and m > 0 and regime_multiplier > 0:
+        # Prevent calculation if any active filter has zeroed out the risk percentage
+        if target_entry > 0 and atr > 0 and m > 0 and scaled_risk_pct > 0:
             target_shares = math.floor(risk_dollar_amount / (atr * m))
             
         # The 'At Least One' Override
-        if target_shares == 0 and total_equity >= target_entry and target_entry > 0 and regime_multiplier > 0:
+        # Ensure that overrides never fire when risk-zero conditions are active
+        if target_shares == 0 and total_equity >= target_entry and target_entry > 0 and scaled_risk_pct > 0:
             target_shares = 1
             
         # --- UPGRADE B INTEGRATION: Dual-Engine Correlation Sizing ---
         corr_multiplier, highly_correlated_ticker, trigger_reason = get_correlation_multiplier(ticker, active_positions)
         
-        if corr_multiplier < 1.0 and regime_multiplier > 0:
+        if corr_multiplier < 1.0 and scaled_risk_pct > 0:
             target_shares = math.floor(target_shares * corr_multiplier)
             if target_shares == 0 and total_equity >= target_entry and target_entry > 0:
                 target_shares = 1 
@@ -686,7 +723,7 @@ def main():
             position_cost = target_shares * target_entry # Recalculate
 
         confidence_str = f"{scaled_risk_pct*100:.1f}% Risk"
-        if corr_multiplier < 1.0 and regime_multiplier > 0:
+        if corr_multiplier < 1.0 and scaled_risk_pct > 0:
             # Scale risk visually based on the exact continuous multiplier
             active_risk_pct = (scaled_risk_pct * corr_multiplier) * 100
             confidence_str = f"{active_risk_pct:.2f}% Risk"
@@ -695,7 +732,7 @@ def main():
                  notes_str += f" {sizing_note}"
             print(f"  [+] Dynamic Sizing: {confidence_str} ({trigger_reason}) | Buy {target_shares} shares")
         else:
-            if regime_multiplier == 0:
+            if scaled_risk_pct == 0:
                 notes_str = f"Buy 0 Shares (~$0.00)"
                 if sizing_note != "Standard Sizing" and sizing_note != "":
                      notes_str += f" {sizing_note}"
