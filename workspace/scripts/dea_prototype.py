@@ -185,5 +185,22 @@ def main():
     run_gog(["update", LIVE_SHEET_ID, f"Watchlist!K1:K{len(rows)}", "--values-json", payload, "--input", "USER_ENTERED"])
     print("Successfully pushed to Google Sheets.")
 
+    from datetime import datetime
+    # Prepare local cache payload [P0-6]
+    dea_scores = {}
+    for d in dmus:
+        dea_scores[d["ticker"]] = {
+            "dea_score": round(d["dea_score"], 4),
+            "last_updated": datetime.now().isoformat()
+        }
+
+    # Save local JSON database atomically using our temp-file replace pattern [P0-6]
+    DEA_SCORES_FILE = "/root/.openclaw/workspace/memory/dea_scores.json"
+    tmp_path = DEA_SCORES_FILE + ".tmp"
+    with open(tmp_path, 'w') as f:
+        json.dump(dea_scores, f, indent=2)
+    os.replace(tmp_path, DEA_SCORES_FILE)
+    print("Local DEA scores database updated.")
+
 if __name__ == "__main__":
     main()
