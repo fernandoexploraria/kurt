@@ -1,7 +1,8 @@
 import json
 import subprocess
 import os
-from datetime import datetime
+import tempfile
+from datetime import datetime, timedelta
 import time
 import requests
 import math
@@ -36,10 +37,38 @@ def load_cache():
         except: pass
     return {}
 
+def save_json_atomic(data, path):
+    """
+    UPGRADE P0-6: Writes state files atomically using temporary files
+    and os.replace to prevent file truncation during mid-write crashes [P0-6].
+    """
+    dir_name = os.path.dirname(path)
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
+
+    with tempfile.NamedTemporaryFile('w', dir=dir_name, delete=False) as tf:
+        temp_path = tf.name
+        json.dump(data, tf, indent=2)
+        tf.flush()
+        os.fsync(tf.fileno())
+
+    os.chmod(temp_path, 0o644)
+    os.replace(temp_path, path)
+
 def save_cache(cache):
-    os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
-    with open(CACHE_FILE, 'w') as f:
-        json.dump(cache, f, indent=2)
+    save_json_atomic(cache, CACHE_FILE)
+
+REGIME_STATE_FILE = "/root/.openclaw/workspace/memory/regime_state.json"
+
+def load_regime_state():
+    """Loads yesterday's macro regime state to evaluate hysteresis [P2-9]."""
+    if os.path.exists(REGIME_STATE_FILE):
+        try:
+            with open(REGIME_STATE_FILE, 'r') as f:
+                return json.load(f)
+        except: pass
+    # Default to State 2 (Chop) on fresh init to remain fail-closed [P0-2]
+    return {"last_state": 2, "last_updated": ""}
 
 def run_subprocess(cmd_list):
     """
@@ -85,10 +114,16 @@ def get_active_positions():
     return tickers
 
 def get_macro_regime(active_positions):
+    """
+    UPGRADE P2-9: Evaluates systemic risk using dynamic hysteresis buffer bands.
+    Includes a fail-closed fallback to prevent aggressive trading during API outages [P0-2, P2-9].
+    """
     spy_close = 0.0
     spy_sma200 = 0.0
     vix_close = 0.0
     avg_portfolio_corr = 0.0
+    spy_above_3d = False
+    spy_below_3d = False
     
     try:
         df_macro = yf.download(["SPY", "^VIX"], period="1y", progress=False)['Close']
@@ -98,7 +133,20 @@ def get_macro_regime(active_positions):
                 if not spy_series.empty:
                     spy_close = spy_series.iloc[-1]
                     if len(spy_series) >= 200:
-                        spy_sma200 = spy_series.rolling(window=200).mean().iloc[-1]
+                        spy_sma200_series = spy_series.rolling(window=200).mean()
+                        spy_sma200 = spy_sma200_series.iloc[-1]
+
+                        # Verify 3-day consecutive crossings to prevent whipsaw [P2-9]
+                        if len(spy_series) >= 203:
+                            last_3_spy = spy_series.iloc[-3:]
+                            last_3_sma = spy_sma200_series.iloc[-3:]
+
+                            below_count = sum(1 for spy_val, sma_val in zip(last_3_spy, last_3_sma) if spy_val < sma_val)
+                            above_count = sum(1 for spy_val, sma_val in zip(last_3_spy, last_3_sma) if spy_val >= sma_val)
+
+                            if below_count == 3: spy_below_3d = True
+                            if above_count == 3: spy_above_3d = True
+
             if "^VIX" in df_macro.columns:
                 vix_series = df_macro["^VIX"].dropna()
                 if not vix_series.empty:
@@ -116,17 +164,57 @@ def get_macro_regime(active_positions):
     except Exception as e:
         print(f"  [!] Error fetching macro regime data: {e}")
         
-    # UPGRADE P0-2: Fail-Closed Regime Initialization [P0-2]
-    regime_state = 2 # Default to conservative/Chop if data is missing or corrupted
-    
-    if spy_sma200 > 0: # Valid data check passed
+    # Load yesterday's state to process transitions [P2-9]
+    prev_state_data = load_regime_state()
+    prev_state = prev_state_data.get("last_state", 2)  # Fail-closed default is State 2
+
+    # Establish raw target state based on immediate indicators
+    raw_state = 1
+    if spy_sma200 > 0:  # Ensure valid data check passed [P0-2]
         if (spy_close < spy_sma200) or (vix_close > 25) or (avg_portfolio_corr >= 0.50):
-            regime_state = 3 # Bear State
+            raw_state = 3
         elif (spy_close >= spy_sma200) and ((vix_close >= 20) or (avg_portfolio_corr >= 0.35)):
-            regime_state = 2 # Chop State
+            raw_state = 2
+    else:
+        raw_state = 2  # Fail-closed default on data outage
+
+    # --- HYSTERESIS STATE TRANSITION ENGINE [P2-9] ---
+    if prev_state == 3:
+        # Exit Bear requires strict de-escalation criteria [P2-9]
+        if (vix_close < 22.0) and (avg_portfolio_corr < 0.45) and spy_above_3d:
+            # Drop down exactly ONE level per day to prevent whipsaw
+            regime_state = 2
+            print("  [🛡️] DE-ESCALATION TRIGGERED: Recovery gates met. Stepping down: State 3 (Bear) -> State 2 (Chop).")
         else:
-            regime_state = 1 # Only upgrade to Bull if all healthy conditions are met [P0-2]
-            
+            regime_state = 3
+            print("  [🛡️] REGIME DE-ESCALATION LOCKED: Staying in State 3 (Bear) until all recovery gates clear.")
+    elif prev_state == 2:
+        if raw_state == 3:
+            # Immediate escalation to State 3 is always permitted for safety
+            regime_state = 3
+            print("  [🚨] REGIME ESCALATION: Market panic detected. Entering State 3 (Bear).")
+        elif raw_state == 1:
+            # Exit Chop to Bull requires 3-day SMA verify, low VIX, and low correlation
+            if spy_above_3d and (vix_close < 20) and (avg_portfolio_corr < 0.35):
+                regime_state = 1
+                print("  [🎉] REGIME UPGRADE: Upgrading to State 1 (Bull Market).")
+            else:
+                regime_state = 2
+        else:
+            regime_state = 2
+    else:  # prev_state == 1
+        if raw_state == 3:
+            regime_state = 3
+            print("  [🚨] REGIME PANIC: Direct crash into State 3 (Bear).")
+        elif raw_state == 2:
+            regime_state = 2
+            print("  [⚠️] REGIME DEGRADATION: Market entering consolidation. State 1 -> State 2 (Chop).")
+        else:
+            regime_state = 1
+
+    # Persist calculated state atomically [P0-6]
+    save_json_atomic({"last_state": regime_state, "last_updated": datetime.now().isoformat()}, REGIME_STATE_FILE)
+
     return regime_state, spy_close, spy_sma200, vix_close, avg_portfolio_corr
 
 def get_beta(ticker, cache):
