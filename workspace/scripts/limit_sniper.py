@@ -70,17 +70,23 @@ def main():
         "x-rapidapi-host": RAPIDAPI_HOST
     }
     
-    try:
-        res = requests.post(url, json={"symbols": symbols_to_query}, headers=headers, timeout=10).json()
-    except Exception as e:
-        print("NO_REPLY")
-        return
+    all_items = []
+    chunk_size = 10
+    
+    for i in range(0, len(symbols_to_query), chunk_size):
+        chunk = symbols_to_query[i:i + chunk_size]
+        try:
+            res = requests.post(url, json={"symbols": chunk}, headers=headers, timeout=10).json()
+            if res.get("success") and "data" in res and "data" in res["data"]:
+                all_items.extend(res["data"]["data"])
+        except Exception as e:
+            continue
 
     alerts = []
     updated = False
 
-    if res.get("success") and "data" in res and "data" in res["data"]:
-        for item in res["data"]["data"]:
+    if all_items:
+        for item in all_items:
             if not item.get("success") or item.get("data", {}).get("current_session") != "market":
                 continue
             
