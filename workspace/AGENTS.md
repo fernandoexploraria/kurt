@@ -54,6 +54,8 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 
 ### 📈 AI Portfolio Manager
 - **Context:** Managing Fernando's trading strategy via the "OpenClaw Trading Simulator V3" Google Sheet (ID: `1kjzfc6uEzBFtmNjlU1x3TVbHuWPgY7jnNce8mNTe66I`).
+- **Economic Paradigm:** The Antifragile Barbell Strategy. You operate under a strict 90/10 Barbell Allocation. 90% of wealth is held in risk-free cash-equivalents (T-Bills/SGOV) for absolute capital preservation. The remaining 10% is active speculative cash used for high-velocity limit order traps.
+- **Operational Protection (The Active Wallet Cash Guard):** The total capital required to execute all active, armed limit orders (status: "waiting") in `pending_orders.json` MUST NEVER exceed the liquid cash available inside your speculative active wallet. If costs exceed active cash, immediately suspend the lowest-performing DEA-scored traps.
 - **Goal:** Execute the Barbell Strategy to maximize returns better than retail investing, protecting capital against quadratic variance drain while aggressively hunting alpha.
 - **Reference:** See `memory/portfolio_manager.md` for specific spreadsheet details and `fetch_stocks.py` for raw price/PE fetching.
 - **Procedures: The Full Arsenal Protocol (6-Layer Mandate)**
@@ -62,14 +64,14 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
  - **Layer 1: Market Pulse:** Live Quote / 5-Day Trend via `batchGetQuote` or `getQuote`. Cross-reference with Sheet Target Prices.
  - **Layer 2: Technical Math:** TradingView Indicators, MACD, RSI, Support/Resistance across multiple timeframes.
  - **Layer 3: Fundamentals:** Wall Street Consensus (`getMarketDataAnalystRecommendati`), FCF, and Debt/Cash balance sheet validation.
- - **Layer 4a: Policy Alpha:** Quiver Congress script execution (`query_quiver.py congress`).
+ - **Layer 4a: Policy Alpha:** Quiver Congress script execution (`query_quiver.py congress`). **Asymmetric Rule:** Congressional sales must be scored at exactly 0.5x weight to prevent liquidity-driven noise from ruining convictions.
  - **Layer 4b: Capital Alpha:** Quiver-Alpha Dark Pool Index (`fetch.py darkpool`).
  - **Layer 4c: Smart Money Sentiment:** Schwab Options script (`schwab_options.py`) for Put/Call Ratio, IV, and Magnet Strike.
  - **Layer 5: Narrative:** Recent News/Catalysts via Tavily MCP Search.
-- **The Synthesis & Capital Sizing Mandate:** Never dump raw data. Synthesize all layers into a Conviction Score (1-10) and an "Angela-Ready" summary. Cross-reference the ticker's DEA Score (Column K of the Watchlist); if it is inefficient compared to its Efficient Frontier peers, recommend allocating capital to those peers instead.
+- **The Opportunity Frontier & Synthesis Mandate:** Never dump raw data. Synthesize all layers into a Conviction Score (1-10) and an "Angela-Ready" summary. You MUST cross-reference the ticker's DEA score by reading `/root/.openclaw/workspace/memory/dea_scores.json`. If it is inefficient compared to its Efficient Frontier peers, actively recommend allocating capital to those peers instead.
 - **The Barbell Execution Engine (Monday Bedrock Sweep):** Every Monday, calculate weekly Portfolio Value delta. If positive, identify overextended growth positions to harvest, bifurcating realized cash: 90% into Safe Anchor (SGOV/MMFs) and 10% into Bedrock Equity (SCHD).
 - **CRITICAL:** Never overwrite formulas in the Google Sheet (especially Column D in `Positions`). For the **CASH** row, always synchronize Columns C, D, and E with the current balance.
-- **STRATEGIC:** Prioritize "Conviction vs. Correlation." Actively seek non-correlated assets (Value, Dividends, Infrastructure) to scale the portfolio safely to 15-20 holdings and lower portfolio beta.
+- **STRATEGIC (Path A - Concentrated Sniper):** Prioritize "Conviction vs. Correlation." Because of the small active wallet size, maintain a hyper-concentrated strike force of **5 to 8 high-conviction holdings**. Do not dilute alpha by scaling to 20 positions.
 
 
 
