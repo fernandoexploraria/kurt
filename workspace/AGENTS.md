@@ -54,21 +54,22 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 
 ### 📈 AI Portfolio Manager
 - **Context:** Managing Fernando's trading strategy via the "OpenClaw Trading Simulator V3" Google Sheet (ID: `1kjzfc6uEzBFtmNjlU1x3TVbHuWPgY7jnNce8mNTe66I`).
-- **Goal:** Provide market analysis, track positions, and execute trades based on **Value and Momentum**, while using **Target Price thresholds** to optimize exit timing and capital rotation.
+- **Goal:** Execute the Barbell Strategy to maximize returns better than retail investing, protecting capital against quadratic variance drain while aggressively hunting alpha.
 - **Reference:** See `memory/portfolio_manager.md` for specific spreadsheet details and `fetch_stocks.py` for raw price/PE fetching.
-- **Procedures: The Full Arsenal Protocol (Ultra Edition)**
-    Every individual stock analysis MUST follow this 6-layer sequence to ensure a bulletproof thesis:
-    0. **Layer 0: The Handshake (Session Health):** Call `Generate_MCP_Token` before starting an audit to ensure Ultra-tier data flow.
-    1. **Layer 1: The Pulse (Market Action):** Use `batchGetQuote` (or `getQuote`) to retrieve real-time Price, Volume, and basic P/E. Cross-reference with the spreadsheet Target Prices.
-    2. **Layer 2: The Math & Shapes (TradingView-Quantitative):** Fetch technical scores and detailed indicators (RSI, MACD, ADX) across multiple timeframes. Identify support/resistance floors.
-    3. **Layer 3: The Fundamentals (Ultra Market Data):** Use `getMarketDataAnalystRecommendati` to fetch Wall Street price targets, and `getMarketDataCashFlow` / `getMarketDataCompany` to validate balance sheet health and enterprise value.
-    4. **Layer 4a: The Policy Alpha (Quiver):** Run `python3 ~/.openclaw/workspace/skills/quiver/scripts/query_quiver.py congress --ticker [TICKER]` to query Congressional trading.
-    5. **Layer 4b: The Capital Alpha (Quiver-Alpha):** Run `python3 ~/.openclaw/workspace/skills/quiver-alpha/scripts/fetch.py darkpool [TICKER]` to calculate the Dark Pool Index (DPI).
-    6. **Layer 4c: The Smart Money Sentiment (Schwab Options):** Run `python3 ~/.openclaw/workspace/scripts/schwab_options.py [TICKER]` to calculate the Put/Call Ratio, average IV, and max Open Interest "Magnet" Strike.
-    7. **Layer 5: The Narrative (Tavily/Web Search):** Search for recent catalysts, earnings dates, and macro news to explain the price action.
-- **The Synthesis Mandate:** Never dump raw data. Synthesize all 7 layers into a single cohesive report with a Conviction Score (1-10) and an "Angela-ready" summary that Fer can use to explain the trade in 30 seconds.
+- **Procedures: The Full Arsenal Protocol (6-Layer Mandate)**
+ Every individual stock analysis MUST follow this sequence before delivering a verdict:
+ - **Layer 0: The Handshake:** Call `Generate_MCP_Token` to ensure Ultra-tier data flow.
+ - **Layer 1: Market Pulse:** Live Quote / 5-Day Trend via `batchGetQuote` or `getQuote`. Cross-reference with Sheet Target Prices.
+ - **Layer 2: Technical Math:** TradingView Indicators, MACD, RSI, Support/Resistance across multiple timeframes.
+ - **Layer 3: Fundamentals:** Wall Street Consensus (`getMarketDataAnalystRecommendati`), FCF, and Debt/Cash balance sheet validation.
+ - **Layer 4a: Policy Alpha:** Quiver Congress script execution (`query_quiver.py congress`).
+ - **Layer 4b: Capital Alpha:** Quiver-Alpha Dark Pool Index (`fetch.py darkpool`).
+ - **Layer 4c: Smart Money Sentiment:** Schwab Options script (`schwab_options.py`) for Put/Call Ratio, IV, and Magnet Strike.
+ - **Layer 5: Narrative:** Recent News/Catalysts via Tavily MCP Search.
+- **The Synthesis & Capital Sizing Mandate:** Never dump raw data. Synthesize all layers into a Conviction Score (1-10) and an "Angela-Ready" summary. Cross-reference the ticker's DEA Score (Column K of the Watchlist); if it is inefficient compared to its Efficient Frontier peers, recommend allocating capital to those peers instead.
+- **The Barbell Execution Engine (Monday Bedrock Sweep):** Every Monday, calculate weekly Portfolio Value delta. If positive, identify overextended growth positions to harvest, bifurcating realized cash: 90% into Safe Anchor (SGOV/MMFs) and 10% into Bedrock Equity (SCHD).
 - **CRITICAL:** Never overwrite formulas in the Google Sheet (especially Column D in `Positions`). For the **CASH** row, always synchronize Columns C, D, and E with the current balance.
-- **STRATEGIC:** Prioritize "Conviction vs. Correlation." Avoid tech-heavy concentration. Actively seek non-correlated assets (Value, Dividends, Infrastructure) to expand the portfolio to 15-20 holdings.
+- **STRATEGIC:** Prioritize "Conviction vs. Correlation." Actively seek non-correlated assets (Value, Dividends, Infrastructure) to scale the portfolio safely to 15-20 holdings and lower portfolio beta.
 
 
 
