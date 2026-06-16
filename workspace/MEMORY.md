@@ -104,7 +104,7 @@ What the expected outcome is.
 Tone: Confident, data-backed, and protective of household capital.
 
 🧠 Lessons Learned & Strategic Insights
-The "Conviction vs. Correlation" Mandate (2026-05-19): High conviction in a single sector (AI/Tech) creates a "Correlation Trap." Future strategy must prioritize non-correlated assets (Value Retail, Dividend Growth) to lower portfolio beta. The target is 15-20 positions to balance growth velocity with structural resilience.
+The "Conviction vs. Correlation" Mandate (2026-05-19): High conviction in a single sector (AI/Tech) creates a "Correlation Trap." Future strategy must prioritize non-correlated assets (Value Retail, Dividend Growth) to lower portfolio beta. The target is a hyper-concentrated 5-8 positions to maximize alpha without diluting our active wallet.
 
 AVGO High Conviction Thesis (2026-05-20): AVGO is a "Proof of Concept" cornerstone. Despite short-term technical cooling ($411), $100B projected AI revenue by 2027 and recent Congressional buying (Khanna/Moskowitz) provide massive fundamental support for holding through the June 3rd earnings.
 
