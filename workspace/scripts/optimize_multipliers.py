@@ -33,14 +33,14 @@ def get_master_universe():
     tickers = set()
 
     # Get Positions
-    pos_data = run_gog(["get", LIVE_SHEET_ID, "Positions!A4:A50", "--json"])
+    pos_data = run_gog(["get", LIVE_SHEET_ID, "Positions!A:A", "--json"])
     if pos_data and "values" in pos_data:
         for row in pos_data["values"]:
             if row and row[0].strip() and row[0].strip() != "CASH" and row[0].strip().upper() != "TICKER":
                 tickers.add(row[0].strip())
 
     # Get Watchlist
-    watch_data = run_gog(["get", LIVE_SHEET_ID, "Watchlist!A2:A50", "--json"])
+    watch_data = run_gog(["get", LIVE_SHEET_ID, "Watchlist!A:A", "--json"])
     if watch_data and "values" in watch_data:
         for row in watch_data["values"]:
             if row and row[0].strip() and row[0].strip().upper() != "TICKER":
@@ -77,7 +77,12 @@ def save_json_atomic(data, path):
     os.replace(temp_path, path)
 
 def backtest_strategy(df, m, strategy_name):
+    """
+    UPGRADE P1-6: Aligns backtest entry logic with active resting limit traps [P1-6].
+    Simulates entering positions strictly via technical limit order wicks rather than closing price.
+    """
     in_position = False
+    trap_armed = False
     wait_for_reset = False
     entry_price = 0.0
     highest_seen = 0.0
@@ -86,42 +91,22 @@ def backtest_strategy(df, m, strategy_name):
     wins = 0
 
     for index, row in df.iterrows():
-        close = float(row['Close'])
-        open_price = float(row['Open'])
-        high = float(row['High'])
-        low = float(row['Low'])
-        atr = float(row['ATR'])
-        ema_50 = float(row['EMA_50'])
-        ema_200 = float(row['EMA_200'])
-        rsi = float(row['RSI'])
+        close = float(row.Close)
+        open_price = float(row.Open)
+        high = float(row.High)
+        low = float(row.Low)
+        atr = float(row.ATR)
+        ema_50 = float(row.EMA_50)
+        ema_200 = float(row.EMA_200)
+        rsi = float(row.RSI)
+        s1_val = float(row.S1)
+        s2_val = float(row.S2)
 
-        if pd.isna(atr) or pd.isna(ema_200) or pd.isna(rsi):
+        if pd.isna(atr) or pd.isna(ema_200) or pd.isna(rsi) or pd.isna(s1_val) or pd.isna(s2_val):
             continue
 
-        if not in_position:
-            triggered = False
-            if strategy_name == "RSI_30" and rsi < 30:
-                triggered = True
-            elif strategy_name == "RSI_40" and rsi < 40:
-                triggered = True
-            elif strategy_name == "EMA_50_Bounce" and low <= ema_50 and close >= (ema_50 * 0.98):
-                triggered = True
-            elif strategy_name == "EMA_200_Bounce" and low <= ema_200 and close >= (ema_200 * 0.98):
-                triggered = True
-            elif strategy_name == "Holy_Grail" and close > ema_200 and rsi < 40:
-                triggered = True
-
-            # If the trigger condition is no longer met, the trend has reset.
-            if not triggered:
-                wait_for_reset = False
-
-            # Only enter if the trigger is met AND we are not in a cooldown.
-            if triggered and not wait_for_reset:
-                in_position = True
-                entry_price = close
-                highest_seen = high
-                trades += 1
-        else:
+        if in_position:
+            # We are in a trade. Evaluate trailing stop exits using today's price action.
             highest_seen = max(highest_seen, high)
             trailing_floor = highest_seen - (atr * m)
 
@@ -130,18 +115,61 @@ def backtest_strategy(df, m, strategy_name):
                 wait_for_reset = True
                 exit_price = open_price if open_price < trailing_floor else trailing_floor
 
-                # --- MATHEMATICAL ADJUSTMENT: Deduct round-trip friction costs ---
-                trade_return = ((exit_price - entry_price) / entry_price) - (2 * COST_PER_SIDE)
+                # Deduct round-trip friction costs [P1-5]
+                trade_return = ((exit_price - entry_price) / entry_price) - (2 * COST_PER_SIDE) if entry_price > 0 else 0
                 total_compound_return *= (1 + trade_return)
 
                 # A trade is counted as a "win" ONLY if it is net-profitable after fees
                 if trade_return > 0: wins += 1
+        else:
+            # We are NOT in a trade.
+            # First, check if a trap was armed yesterday, and if we get filled today (T+1) [P1-6]
+            if trap_armed and not wait_for_reset:
+                if strategy_name == "EMA_50_Bounce":
+                    limit_price = ema_50
+                elif strategy_name in ["EMA_200_Bounce", "Holy_Grail"]:
+                    limit_price = ema_200
+                elif strategy_name == "RSI_40":
+                    limit_price = s1_val
+                elif strategy_name == "RSI_30":
+                    limit_price = s2_val
+                else:
+                    limit_price = close
+
+                # Check if the low of today touched or breached our resting limit price [P1-6]
+                if low <= limit_price and limit_price > 0:
+                    in_position = True
+                    # If the market opened below our limit, we get filled at the Open (slippage protection) [P1-6]
+                    entry_price = open_price if open_price < limit_price else limit_price
+                    highest_seen = high
+                    trades += 1
+                    trap_armed = False # Trap executed
+
+            # Second, evaluate today's close to see if we should arm (or keep armed) a trap for tomorrow
+            if not in_position:
+                triggered = False
+                if strategy_name == "RSI_30" and rsi < 30:
+                    triggered = True
+                elif strategy_name == "RSI_40" and rsi < 40:
+                    triggered = True
+                elif strategy_name == "EMA_50_Bounce" and low <= ema_50 and close >= (ema_50 * 0.98):
+                    triggered = True
+                elif strategy_name == "EMA_200_Bounce" and low <= ema_200 and close >= (ema_200 * 0.98):
+                    triggered = True
+                elif strategy_name == "Holy_Grail" and close > ema_200 and rsi < 40:
+                    triggered = True
+
+                if triggered and not wait_for_reset:
+                    trap_armed = True
+                else:
+                    wait_for_reset = False
+                    trap_armed = False
 
     if in_position:
-        end_price = float(df['Close'].iloc[-1])
+        end_price = float(df.Close.iloc[-1])
 
-        # --- MATHEMATICAL ADJUSTMENT: Deduct final liquidation friction costs ---
-        trade_return = ((end_price - entry_price) / entry_price) - (2 * COST_PER_SIDE)
+        # Deduct final liquidation friction costs [P1-5]
+        trade_return = ((end_price - entry_price) / entry_price) - (2 * COST_PER_SIDE) if entry_price > 0 else 0
         total_compound_return *= (1 + trade_return)
         if trade_return > 0: wins += 1
 
@@ -150,7 +178,7 @@ def backtest_strategy(df, m, strategy_name):
 
     return final_return, win_rate, trades
 
-# --- UPGRADE 4: Rolling Out-of-Sample Walk-Forward Backtester ---
+# --- Rolling Out-of-Sample Walk-Forward Backtester ---
 def walk_forward_backtest(df, m, strategy_name, w_fit, rho):
     """
     Simulates a continuous, chronological Walk-Forward Optimization pipeline.
@@ -187,15 +215,29 @@ def walk_forward_backtest(df, m, strategy_name, w_fit, rho):
     final_oos_return = (global_oos_returns - 1.0) * 100.0
     return final_oos_return, total_trades
 
+def load_existing_json(path):
+    if os.path.exists(path):
+        try:
+            with open(path, 'r') as f:
+                return json.load(f)
+        except: pass
+    return {}
+
 def main():
-    print(f"[{datetime.now().isoformat()}] Starting Weekly Joint Quant Optimizer (Regime-Adaptive)...")
+    import sys
+    print(f"[{datetime.now().isoformat()}] Starting Weekly Joint Quant Optimizer (Worker Node)...")
 
-    universe = get_master_universe()
-    if not universe:
-        print("Failed to pull universe. Exiting.")
-        return 1
-
-    print(f"Found {len(universe)} unique tickers to optimize.\n")
+    # If tickers are passed via CLI, use those. Otherwise, fetch the full universe.
+    cli_args = sys.argv[1:]
+    if cli_args:
+        universe = cli_args
+        print(f"Worker received {len(universe)} specific tickers to process.")
+    else:
+        universe = get_master_universe()
+        if not universe:
+            print("Failed to pull universe. Exiting.")
+            return 1
+        print(f"Found {len(universe)} unique tickers to optimize.\n")
 
     # Parameters and strategies to test
     multipliers_to_test = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
@@ -203,14 +245,15 @@ def main():
 
     # --- TEMPORAL PARAMETER GRID ---
     w_fit_grid = [126, 252, 378, 504] # 6m, 12m, 18m, 24m training windows
-    rho_grid = [3, 4, 5, 8] # Corrected validation ratios (Minimum 3:1 up to 8:1)
+    rho_grid = [3, 4, 5, 6] # Corrected validation ratios (Minimum 3:1 up to 8:1) [P1-4]
 
     # Lightweight subset to ensure extremely fast Sunday execution
-    grid_strats = ["RSI_30", "EMA_200_Bounce"]
-    grid_mults = [2.0, 3.0]
+    grid_strats = ["RSI_40", "EMA_200_Bounce", "EMA_50_Bounce"]
+    grid_mults = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
 
-    multipliers_results = {}
-    entries_results = {}
+    # LOAD EXISTING DATA SO WE APPEND INSTEAD OF OVERWRITE
+    multipliers_results = load_existing_json(MULTIPLIERS_FILE)
+    entries_results = load_existing_json(ENTRIES_FILE)
 
     for ticker in universe:
         print(f"Optimizing {ticker}...", end=" ", flush=True)
@@ -223,6 +266,25 @@ def main():
 
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
+
+            # --- DYNAMIC CAUSAL MONTHLY PIVOT RESAMPLER [P1-6] ---
+            # 1. Create a YearMonth period column on daily data for clean alignment [P1-6]
+            df['YearMonth'] = df.index.to_period('M')
+
+            # 2. Resample to monthly period to calculate monthly support S1/S2 pivots
+            df_monthly = df.resample('ME').agg({'High': 'max', 'Low': 'min', 'Close': 'last'})
+            df_monthly.index = df_monthly.index.to_period('M')
+
+            df_monthly['PP'] = (df_monthly.High + df_monthly.Low + df_monthly.Close) / 3.0
+            df_monthly['S1'] = (2.0 * df_monthly.PP) - df_monthly.High
+            df_monthly['S2'] = df_monthly.PP - (df_monthly.High - df_monthly.Low)
+
+            # 3. Shift the monthly pivots by 1 period to ensure strict look-ahead causality [P1-6]
+            # (e.g., February daily rows will use January's calculated monthly pivots)
+            df_monthly_shifted = df_monthly[['S1', 'S2']].shift(1)
+
+            # 4. Join the shifted monthly pivots back to the daily data using the YearMonth index [P1-6]
+            df = df.join(df_monthly_shifted, on='YearMonth', rsuffix='_monthly')
 
             df['Prev_Close'] = df['Close'].shift(1)
             tr1 = df['High'] - df['Low']
