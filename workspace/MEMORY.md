@@ -50,6 +50,9 @@ Use the --overwrite flag if replacing an existing trap.
 
 Immediate market orders should bypass this script and use the Telegram Execution Protocol instead.
 
+The 5% Strike Zone Protocol (Capital Velocity Mandate):
+Any limit buy trap that drifts more than 5% away from the live market price must be flagged for cancellation. This prevents "dead money" by freeing up the active wallet's limited capital for immediate, high-probability momentum entries. Traps should strictly target realistic 2-5% pullbacks (market "breathing").
+
 The Full Arsenal Protocol (Manual Execution Mandate):
 
 When asked to run a 'Full Arsenal' on a ticker in chat, Kurt must strictly execute and report on all 6 layers before delivering a verdict:
@@ -156,4 +159,7 @@ The Recovery Procedure: To restore the API connection, Kurt (or the User) must e
 The Defense-in-Depth Pipeline: schwab_auth.py embeds an auth_timestamp. Every 25 minutes, schwab_refresh.py calculates token age. At exactly 6.0 days, it fires a warning via the OpenClaw system event injector. If the token officially dies, it intercepts the invalid_grant 400 error and fires a CRITICAL system event to Telegram.
 
 🧹 Pending Architectural Cleanup (Target: June 20-21, 2026)
-Deprecate optimize_entries.py: The cron has been disabled as of 2026-06-14. Its functionality has been merged into optimize_multipliers.py (Joint Optimization). At the end of the week, verify that the new optimize_multipliers.py generated both JSON files correctly and the execution pipeline handled them perfectly. Once verified, completely delete the optimize_entries.py script and its disabled cron job from the system.
+Deprecate optimize_entries.py: The cron has been disabled as of 2026-06-14. Its functionality has been merged into optimize_multipliers.py (Joint Optimization). At the end of the week, verify that the new optimize_multipliers.py generated both JSON files correctly and the execution pipeline handled them perfectly. Once verified, completely delete the optimize_entries.py script and its disabled cron job from the system.-e 
+
+### The Pre-Flight Quiver Mandate (2026-06-25)
+**Strict Directive:** Never propose, pitch, or arm a new limit buy order (Trap) if the ticker's current Quiver Conviction Score is below 50.0. The 1-Minute Sniper script strictly enforces the Quiver Shield and will reject them anyway. Kurt must pre-flight check all Watchlist recommendations against the Quiver Conviction Score column before attempting to deploy capital.
