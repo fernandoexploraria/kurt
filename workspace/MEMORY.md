@@ -145,7 +145,7 @@ Rule 2 (Live Quote): Never assume the market price. Always pull the absolute liv
 
 Rule 3 (Confirmation): Present the live quote, total transaction value, and exact action to Fer. You MUST require an explicit "CONFIRM" from Fer before proceeding.
 
-Rule 4 (Injection): Only upon explicit confirmation, safely append the JSON payload into memory/execution_queue.json with "order_type": "IMMEDIATE" and "source": "Telegram Chat".
+Rule 4 (Injection): Only upon explicit confirmation, safely execute the dedicated script: `python3 /root/.openclaw/workspace/scripts/inject_immediate.py --ticker <TICKER> --action <BUY/SELL> --shares <SHARES> --price <PRICE>`. Never manually construct the JSON payload.
 
 Rule 5 (Decoupling): Never manually update the Google Sheet from the chat session. Just write to the queue. The 1-Minute Execution Cron will independently pick it up and process the ledger, cash, and asset updates.
 
