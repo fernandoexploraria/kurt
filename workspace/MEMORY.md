@@ -163,3 +163,8 @@ Deprecate optimize_entries.py: The cron has been disabled as of 2026-06-14. Its 
 
 ### The Pre-Flight Quiver Mandate (2026-06-25)
 **Strict Directive:** Never propose, pitch, or arm a new limit buy order (Trap) if the ticker's current Quiver Conviction Score is below 50.0. The 1-Minute Sniper script strictly enforces the Quiver Shield and will reject them anyway. Kurt must pre-flight check all Watchlist recommendations against the Quiver Conviction Score column before attempting to deploy capital.
+
+### The Cash Shield Protocol (2026-07-01)
+**Strategic Insight:** Cash-equivalent Treasury ETFs (like SGOV, BIL, SHV) follow a mechanical "saw-tooth" price pattern due to daily interest accrual and monthly ex-dividend drops. 
+**Directive:** Standard volatility-based trailing stops or automated sell limits must NEVER be applied to them, as the mechanical dividend drop will falsely trigger a liquidation of the "Safe Anchor" in our 90/10 Barbell Strategy.
+**Execution:** A hardcoded "Cash Shield" exception exists in both the Intraday and Limit Sniper scripts. If an automated sell or stop-loss is triggered for SGOV/BIL/SHV, the scripts will log `aborted_cash_shield` and refuse to liquidate the position.

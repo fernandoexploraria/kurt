@@ -110,6 +110,13 @@ def main():
                 if (action == "BUY" and current_price <= target_price) or (action == "SELL" and current_price >= target_price) or (action == "STOP_LOSS" and current_price <= target_price):
                     order_type = order.get("type", "DAY")
                     
+                    if ticker in ["SGOV", "BIL", "SHV"] and action in ["SELL", "STOP_LOSS"]:
+                        order["status"] = "aborted_cash_shield"
+                        updated = True
+                        log_msg = f"{datetime.now().isoformat()} - 🛡️ **CASH SHIELD ACTIVATED:** {ticker} sell trigger ignored to protect Safe Anchor.\\n"
+                        with open("/root/.openclaw/workspace/memory/sniper_alerts.log", "a") as logf: logf.write(log_msg)
+                        continue
+
                     if action == "BUY":
                         shield_data = shield.get(ticker, {})
                         conviction = shield_data.get("score", 50)

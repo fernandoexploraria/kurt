@@ -107,6 +107,11 @@ def main():
             
             # 2. Check for breach
             if current_price < current_floor:
+                if ticker in ["SGOV", "BIL", "SHV"]:
+                    state["status"] = "aborted_cash_shield"
+                    updated = True
+                    continue
+
                 # Log to execution queue
                 import time
                 from datetime import datetime
