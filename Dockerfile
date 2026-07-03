@@ -1,4 +1,4 @@
-FROM ghcr.io/openclaw/openclaw:2026.5.20
+FROM ghcr.io/openclaw/openclaw:2026.6.11
 
 #  Switch to root to install system packages
 USER root

@@ -41,16 +41,16 @@
       "timeoutSeconds": 600,
       "workspace": "/root/.openclaw/workspace",
       "model": {
-        "primary": "google/gemini-3.1-pro-preview"
+        "primary": "google/gemini-3.5-flash"
       },
       "models": {
-        "google/gemini-3-flash-preview": {},
+        "google/gemini-3.5-flash": {},
         "google/gemini-3.1-pro-preview": {}
       },
       "heartbeat": {
         "every": "30m"
       },
-      "thinkingDefault": "high"
+      "thinkingDefault": "low"
     }
   },
   "session": {
@@ -251,8 +251,8 @@
     "lastRunMode": "local"
   },
   "meta": {
-    "lastTouchedVersion": "2026.5.20",
-    "lastTouchedAt": "2026-06-01T02:25:58.802Z"
+    "lastTouchedVersion": "2026.6.11",
+    "lastTouchedAt": "2026-07-02T22:08:37.542Z"
   },
   "channels": {
     "telegram": {
