@@ -40,6 +40,9 @@
     "defaults": {
       "timeoutSeconds": 600,
       "workspace": "/root/.openclaw/workspace",
+      "memorySearch": {
+        "enabled": false
+      },
       "model": {
         "primary": "google/gemini-3.5-flash"
       },
@@ -57,7 +60,7 @@
     "dmScope": "per-channel-peer"
   },
   "tools": {
-    "profile": "coding",
+    "profile": "full",
     "web": {
       "search": {
         "provider": "tavily"
@@ -66,9 +69,7 @@
     "elevated": {
       "enabled": true,
       "allowFrom": {
-        "webchat": [
-          "*"
-        ]
+        "webchat": []
       }
     }
   },
