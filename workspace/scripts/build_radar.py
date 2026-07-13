@@ -14,6 +14,7 @@ RAPIDAPI_HOST = "tradingview-data1.p.rapidapi.com"
 RADAR_FILE = "/root/.openclaw/workspace/memory/trailing_radar.json"
 CACHE_FILE = "/root/.openclaw/workspace/memory/exchange_cache.json"
 OPTIMIZED_FILE = "/root/.openclaw/workspace/memory/optimized_multipliers.json"
+ORDERS_FILE = "/root/.openclaw/workspace/memory/pending_orders.json"
 
 BETA_THRESHOLD = 1.05 # Any stock with a Beta >= 1.05 gets a trailing stop
 DEFAULT_ATR_MULTIPLIER = 3.0  # Fallback
@@ -81,7 +82,8 @@ def run_gog(args_list):
 
 def get_positions():
     out = run_gog(["get", TEST_SHEET_ID, "Positions!A4:K50", "--json"])
-    if not out: return []
+    if out is None:
+        return None  # read failure: must NOT be treated as an empty book
     active = []
     for i, row in enumerate(out.get('values', [])):
         if len(row) >= 10:
@@ -120,13 +122,66 @@ def get_beta(ticker, cache):
         time.sleep(0.3)
     return None
 
+def sync_stop_traps(new_radar):
+    """
+    Syncs STOP_LOSS exit traps to the CANONICAL radar floor (this script owns
+    the floor). Take-profit (SELL) traps remain owned by calibrate_targets.
+    A STOP_LOSS trap whose ticker is no longer an active radar position is
+    suspended (the position was closed).
+    """
+    if not os.path.exists(ORDERS_FILE):
+        return
+    try:
+        with open(ORDERS_FILE, 'r') as f:
+            orders = json.load(f)
+    except Exception as e:
+        print(f"  [!] Failed to load pending orders: {e}")
+        return
+
+    updated = False
+    print("\n=== SYNCHRONIZING STOP_LOSS TRAPS (Canonical Radar Floor) ===")
+    for ticker, data in orders.items():
+        if data.get("action") != "STOP_LOSS":
+            continue
+        status = data.get("status")
+        if status not in ("waiting", "suspended"):
+            continue
+
+        if ticker in new_radar:
+            new_floor = new_radar[ticker]["current_floor"]
+            if status == "suspended":
+                print(f"  [Re-arm] {ticker} STOP_LOSS (position active again).")
+                data["status"] = "waiting"
+                data.pop("suspend_reason", None)
+                updated = True
+            if data.get("target_price") != new_floor:
+                print(f"  [Sync] {ticker} STOP_LOSS: ${data.get('target_price')} -> ${new_floor}")
+                data["target_price"] = new_floor
+                updated = True
+        else:
+            if status == "waiting":
+                print(f"  [Suspend] {ticker} STOP_LOSS: no active position on radar.")
+                data["status"] = "suspended"
+                data["suspend_reason"] = "Position no longer held / not on radar"
+                updated = True
+
+    if updated:
+        save_json_atomic(orders, ORDERS_FILE)
+        print("  [✓] STOP_LOSS traps synchronized to radar floor (atomic).")
+    else:
+        print("  [-] No STOP_LOSS traps required updating.")
+
 def main():
     print(f"[{datetime.now().isoformat()}] Building Trailing Radar...")
     cache = load_json(CACHE_FILE)
     radar = load_json(RADAR_FILE)
     optimized_multipliers = load_json(OPTIMIZED_FILE)
     positions = get_positions()
-    
+    if positions is None:
+        print("🚨 Positions read failed — NOT rebuilding radar (would wipe every "
+              "stop). Keeping yesterday's trailing_radar.json in force.")
+        return 1
+
     new_radar = {}
     
     for pos in positions:
@@ -211,7 +266,12 @@ def main():
             run_gog(["update", TEST_SHEET_ID, f"Positions!L{row_num}", "--values-json", f'[["{drop_amount}"]]', "--input", "USER_ENTERED"])
             
     save_json_atomic(new_radar, RADAR_FILE)
-    print(f"\nRadar build complete. {len(new_radar)} high-beta targets saved to {RADAR_FILE}.")
+    print(f"\nRadar build complete. {len(new_radar)} positions protected -> {RADAR_FILE}.")
+
+    # STOP_LOSS traps follow the canonical radar floor (single owner per trap type).
+    sync_stop_traps(new_radar)
+    return 0
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.exit(main() or 0)

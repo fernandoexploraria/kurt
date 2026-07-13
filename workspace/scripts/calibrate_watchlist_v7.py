@@ -25,6 +25,16 @@ REGIME_STATE_FILE = "/root/.openclaw/workspace/memory/regime_state.json"
 # --- NEW CONFIGURATION: DEA SCORES CACHE ---
 DEA_SCORES_FILE = "/root/.openclaw/workspace/memory/dea_scores.json"
 
+# --- DPI DIRECTIONALITY ---
+# True  = high DPI (>0.50) is treated as a HEADWIND (lowers entry bid / target).
+# False = high DPI is treated as accumulation/bullish.
+# This preserves the current behavior but makes the assumption explicit and
+# trivially flippable. The correct value depends on exactly what your
+# quiver-alpha fetch.py returns (off-exchange short share vs. dark-pool buy
+# share); verify against that source. The SqueezeMetrics DIX convention treats
+# high as bullish, but a raw off-exchange short-volume ratio is the opposite.
+DPI_HIGH_IS_BEARISH = True
+
 def load_shield():
     if os.path.exists(SHIELD_FILE):
         try:
@@ -256,11 +266,16 @@ def get_beta(ticker, cache):
                 try:
                     return float(res["data"]["data"]["beta_1_year"])
                 except:
-                    return 1.0
+                    # Fail-closed: unknown beta is treated as high-beta so the
+                    # ticker still receives the Chop/Bear regime size penalty
+                    # rather than escaping it.
+                    return 1.05
         except:
             pass
         time.sleep(0.1) # Minimal throttling for RapidAPI
-    return 1.0
+    # Fail-closed default on total fetch failure (was 1.0, which let an
+    # unknown-beta name dodge the high-beta penalty in Chop/Bear regimes).
+    return 1.05
 
 def get_watchlist():
     out = run_gog(["get", TEST_SHEET_ID, "Watchlist!A2:H50", "--json"])
@@ -376,11 +391,13 @@ def get_quiver_adjustments(ticker, shield_cache):
     modifier = 1.0
     shield_data = shield_cache.get(ticker, {})
 
-    # 1. Dark Pool Index (DPI) Adjustments
+    # 1. Dark Pool Index (DPI) Adjustments (direction governed by DPI_HIGH_IS_BEARISH).
+    #    Behavior is unchanged from prior version: only DPI > 0.50 moves the
+    #    modifier; the flag only controls the SIGN of that move.
     latest_dpi = shield_data.get("dpi", 0.5)
     if latest_dpi > 0.50:
-        reduction = (latest_dpi - 0.50) * 0.2
-        modifier -= min(reduction, 0.05)
+        shift = min((latest_dpi - 0.50) * 0.2, 0.05)
+        modifier += -shift if DPI_HIGH_IS_BEARISH else shift
 
     # 2. Congressional Conviction Score Adjustments (Volume-Weighted)
     score = shield_data.get("score", 50)
@@ -391,6 +408,53 @@ def get_quiver_adjustments(ticker, shield_cache):
         modifier += boost
 
     return modifier
+
+def compute_dea_size_multiplier(ticker, dea_cache, cohort_scores):
+    """
+    UPGRADE (DEA gate rework): converts a DEA cross-efficiency score into a
+    BOUNDED, DISTRIBUTION-RELATIVE size tilt instead of a hard lockout.
+
+    Why: cross-efficiency is a relative measure. A frontier always exists and
+    most names score well below it, so the prior absolute gate ("< 80 -> size
+    0; >= 100 -> 1.25x") locked out ~3/4 of the watchlist on average while the
+    boost arm essentially never fired. This maps each name to its PERCENTILE
+    rank within the current cohort and tilts size on a continuous curve:
+        bottom of cohort -> 0.50x   (de-emphasize, never zero)
+        cohort median    -> 1.00x   (neutral)
+        top of cohort    -> 1.25x   (frontier boost)
+    DEA never forces a zero; only the regime engine zeroes a trade.
+
+    Returns (multiplier, label_or_None).
+    """
+    if ticker not in dea_cache:
+        return 1.0, None
+    # Need a meaningful cross-section to rank against.
+    if not cohort_scores or len(cohort_scores) < 4:
+        return 1.0, None
+
+    score = float(dea_cache[ticker].get("dea_score", 0.0)) * 100.0
+    lo, hi = cohort_scores[0], cohort_scores[-1]
+    if (hi - lo) < 1.0:
+        # Degenerate (all names ~equally efficient): no signal, stay neutral.
+        return 1.0, None
+
+    n = len(cohort_scores)
+    # Percentile rank (fraction of cohort at or below this score), 0..1.
+    p = sum(1 for s in cohort_scores if s <= score) / n
+
+    if p >= 0.5:
+        mult = 1.0 + ((p - 0.5) / 0.5) * 0.25   # 1.00 .. 1.25
+    else:
+        mult = 0.5 + (p / 0.5) * 0.5             # 0.50 .. 1.00
+    mult = round(max(0.5, min(1.25, mult)), 3)
+
+    if p >= 0.75:
+        label = f"🎯 DEA top-quartile tilt {mult:.2f}x ({score:.0f})"
+    elif p < 0.25:
+        label = f"🔻 DEA bottom-quartile tilt {mult:.2f}x ({score:.0f})"
+    else:
+        label = None  # mid-cohort, ~neutral: keep the note clean
+    return mult, label
 
 def get_correlation_multiplier(candidate, active_positions):
     """
@@ -569,6 +633,14 @@ def main():
     total_equity = get_total_equity()
     print(f"[i] Live Portfolio Total Equity: ${total_equity:,.2f}")
 
+    # Fail-closed: a transient equity-read failure (0.0) would size every name
+    # to 0 shares and suspend every BUY trap. Abort instead and keep yesterday's
+    # calibration in force so the orchestrator can halt the chain.
+    if total_equity <= 0:
+        print("🚨 FATAL: Equity read as $0. Refusing to recalibrate sizing "
+              "(would suspend all traps). Leaving yesterday's calibration in force.")
+        return 1
+
     active_positions = get_active_positions()
     print(f"[i] Active Positions Found: {len(active_positions)}")
 
@@ -586,6 +658,21 @@ def main():
         except: pass
 
     tickers = get_watchlist()
+
+    # Build the DEA cohort distribution: scores for the watchlist names that the
+    # DEA prototype scored this morning. Used by the relative size tilt so a
+    # name is judged against its peers, not an absolute threshold.
+    dea_cohort = sorted(
+        float(dea_cache[t['ticker']].get("dea_score", 0.0)) * 100.0
+        for t in tickers if t['ticker'] in dea_cache
+    )
+    if dea_cohort:
+        med = dea_cohort[len(dea_cohort) // 2]
+        print(f"[i] DEA cohort: {len(dea_cohort)} scored names "
+              f"(min {dea_cohort[0]:.0f} | median {med:.0f} | max {dea_cohort[-1]:.0f})")
+    else:
+        print("[i] DEA cohort: no scored names available (tilt neutral this run).")
+
     results = []
     new_targets = {}
 
@@ -653,20 +740,17 @@ def main():
             catalyst_multiplier = 1.00
             sizing_note = "Standard Sizing"
 
-        # --- PHASE 4.1: DEA FRONTIER SIZING GATE ---
-        dea_multiplier = 1.00
-        if ticker in dea_cache:
-            # Re-scale from 0.0-1.0 float back to a 100% display scale
-            dea_score = float(dea_cache[ticker].get("dea_score", 1.0)) * 100.0
-
-            if dea_score >= 100.0:
-                dea_multiplier = 1.25
-                if sizing_note == "Standard Sizing": sizing_note = ""
-                sizing_note += f" | 🎯 1.25x DEA Frontier Boost"
-            elif dea_score < 80.0:
-                dea_multiplier = 0.00
-                if sizing_note == "Standard Sizing": sizing_note = ""
-                sizing_note += f" | 🛑 Lockout: Inefficient DEA ({dea_score:.1f}%)"
+        # --- PHASE 4.1: DEA DISTRIBUTION-RELATIVE SIZE TILT ---
+        # Bounded [0.50x .. 1.25x] tilt by cohort percentile rank. Never zeroes
+        # a trade (only the regime engine zeroes). This replaces the prior
+        # absolute gate ("< 80 -> 0; >= 100 -> 1.25x"), which empirically locked
+        # out ~3/4 of the watchlist while its boost arm almost never fired,
+        # because cross-efficiency is a relative measure. See
+        # compute_dea_size_multiplier for the curve.
+        dea_multiplier, dea_label = compute_dea_size_multiplier(ticker, dea_cache, dea_cohort)
+        if dea_label:
+            if sizing_note == "Standard Sizing": sizing_note = ""
+            sizing_note += f" | {dea_label}"
 
         # Scale the At-Risk Capital
         # --- PATH B: MULTI-STATE REGIME SIZING ---
@@ -765,6 +849,8 @@ def main():
     for r in results[:3]: print(f"{r['ticker']} - Entry: ${r['entry']} ({r['pct']:.2f}% away)")
 
     sync_pending_orders(new_targets)
+    return 0
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.exit(main() or 0)

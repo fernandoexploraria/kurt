@@ -90,17 +90,22 @@ def backtest_strategy(df, m, strategy_name):
     trades = 0
     wins = 0
 
-    for index, row in df.iterrows():
-        close = float(row.Close)
-        open_price = float(row.Open)
-        high = float(row.High)
-        low = float(row.Low)
-        atr = float(row.ATR)
-        ema_50 = float(row.EMA_50)
-        ema_200 = float(row.EMA_200)
-        rsi = float(row.RSI)
-        s1_val = float(row.S1)
-        s2_val = float(row.S2)
+    COST_PER_SIDE = 0.0005
+
+    # Zip lists together to avoid .iterrows() pandas series overhead
+    rows = list(zip(df['Close'], df['Open'], df['High'], df['Low'], df['ATR'], df['EMA_50'], df['EMA_200'], df['RSI'], df['S1'], df['S2']))
+
+    for row in rows:
+        close = float(row[0])
+        open_price = float(row[1])
+        high = float(row[2])
+        low = float(row[3])
+        atr = float(row[4])
+        ema_50 = float(row[5])
+        ema_200 = float(row[6])
+        rsi = float(row[7])
+        s1_val = float(row[8])
+        s2_val = float(row[9])
 
         if pd.isna(atr) or pd.isna(ema_200) or pd.isna(rsi) or pd.isna(s1_val) or pd.isna(s2_val):
             continue
@@ -178,7 +183,6 @@ def backtest_strategy(df, m, strategy_name):
 
     return final_return, win_rate, trades
 
-# --- Rolling Out-of-Sample Walk-Forward Backtester ---
 def walk_forward_backtest(df, m, strategy_name, w_fit, rho):
     """
     Simulates a continuous, chronological Walk-Forward Optimization pipeline.
@@ -245,7 +249,7 @@ def main():
 
     # --- TEMPORAL PARAMETER GRID ---
     w_fit_grid = [126, 252, 378, 504] # 6m, 12m, 18m, 24m training windows
-    rho_grid = [3, 4, 5, 6] # Corrected validation ratios (Minimum 3:1 up to 8:1) [P1-4]
+    rho_grid = [3, 4, 5, 6] # Train:validation ratios from 3:1 up to 6:1 [P1-4]
 
     # Lightweight subset to ensure extremely fast Sunday execution
     grid_strats = ["RSI_40", "EMA_200_Bounce", "EMA_50_Bounce"]

@@ -51,9 +51,26 @@
         "google/gemini-3.1-pro-preview": {}
       },
       "heartbeat": {
-        "every": "30m"
+        "every": "240m"
       },
       "thinkingDefault": "low"
+    }
+  },
+  "models": {
+    "providers": {
+      "google": {
+        "api": "google-generative-ai",
+        "models": [
+          {
+            "id": "gemini-3.5-flash",
+            "name": "gemini-3.5-flash"
+          },
+          {
+            "id": "gemini-3.1-pro-preview",
+            "name": "gemini-3.1-pro-preview"
+          }
+        ]
+      }
     }
   },
   "session": {

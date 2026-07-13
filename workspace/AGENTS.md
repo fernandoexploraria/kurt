@@ -165,7 +165,7 @@ You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it
 
 - Multiple checks can batch together (inbox + calendar + notifications in one turn)
 - You need conversational context from recent messages
-- Timing can drift slightly (every ~30 min is fine, not exact)
+- Timing can drift slightly (every ~60 min is fine, not exact)
 - You want to reduce API calls by combining periodic checks
 
 **Use cron when:**
@@ -209,7 +209,7 @@ You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it
 - Late night (23:00-08:00) unless urgent
 - Human is clearly busy
 - Nothing new since last check
-- You just checked &lt;30 minutes ago
+- You just checked &lt;240 minutes ago
 
 **Proactive work you can do without asking:**
 

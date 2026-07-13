@@ -166,19 +166,19 @@ def main():
     token = get_quiver_token()
     if not token:
         print("No Quiver token found.")
-        return
+        return 1
 
     print("Fetching Watchlist...")
     watchlist_data = run_gog(["get", LIVE_SHEET_ID, "Watchlist!A:K", "--json"])
     if not watchlist_data or "values" not in watchlist_data:
         print("Failed to fetch watchlist.")
-        return
+        return 1
 
     rows = watchlist_data["values"]
     
     if not rows or len(rows) == 0:
         print("Watchlist is empty.")
-        return
+        return 0
         
     # Ensure header for Column J exists
     header_row = rows[0]
@@ -312,6 +312,8 @@ def main():
     save_json_atomic(shield_data, SHIELD_FILE)
         
     print("\nQuiver Shield successfully built and synchronized!")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.exit(main() or 0)

@@ -31,7 +31,12 @@ def load_json(path):
     return {}
 
 def main():
-    print("=== DEA Prototype for Equity Selection (BCC Input-Oriented) ===")
+    # NOTE: dea_score is a cross-efficiency (peer-appraisal) measure. It is a
+    # RELATIVE, cross-sectional quantity: a frontier always exists and most names
+    # score well below it, so absolute thresholds (e.g. "lock out < 80") are
+    # inappropriate. The watchlist calibrator consumes these scores via a
+    # distribution-relative, bounded tilt (never a hard zero). See README.
+    print("=== DEA Prototype for Equity Selection (Range-Directional + Cross-Efficiency) ===")
 
     # 1. Load data
     print("Loading optimized entries...")
@@ -45,11 +50,11 @@ def main():
     watchlist_data = run_gog(["get", LIVE_SHEET_ID, "Watchlist!A:J", "--json"])
     if not watchlist_data or "values" not in watchlist_data:
         print("Failed to fetch watchlist.")
-        return
+        return 1
 
     rows = watchlist_data["values"]
     if len(rows) == 0:
-        return
+        return 0
 
     # Extract metrics
     dmus = []
@@ -91,7 +96,7 @@ def main():
 
     if not dmus:
         print("No valid DMUs found.")
-        return
+        return 0
 
     print(f"Parsed {len(dmus)} valid DMUs. Normalizing data...")
 
@@ -121,6 +126,11 @@ def main():
 
     eps = 1e-6
     Weights = np.zeros((n_dmus, n_inputs + n_outputs + 1))
+    # Track which DMUs produced a valid LP solution. A FAILED solve leaves
+    # all-zero weights, which would score every peer as inefficiency=0 -> CE=1.0,
+    # injecting a full row of 1.0s that inflates every column average upward.
+    # We therefore record validity and exclude failed evaluators from Phase 3.
+    valid_evaluator = np.zeros(n_dmus, dtype=bool)
 
     # Phase 1: Self-Evaluation (Solve LP for each DMU using normalized coordinates)
     for o in range(n_dmus):
@@ -145,30 +155,42 @@ def main():
 
         if res.success:
             Weights[o, :] = res.x
+            valid_evaluator[o] = True
             dmus[o]["self_score"] = max(0.0, 1.0 - res.fun)
         else:
+            # Leave weights zero, mark invalid so this DMU does NOT vote in Phase 3.
             Weights[o, :] = 0
+            valid_evaluator[o] = False
             dmus[o]["self_score"] = 0.0
+
+    n_valid = int(valid_evaluator.sum())
+    if n_valid < n_dmus:
+        print(f"  [!] {n_dmus - n_valid} DMU LP solve(s) failed; excluding them as cross-efficiency evaluators.")
 
     # Phase 2: Cross-Efficiency Matrix (Evaluated on normalized coordinates)
     print("Calculating Cross-Efficiency Peer Evaluation Matrix...")
     CE_matrix = np.zeros((n_dmus, n_dmus))
 
     for o in range(n_dmus):
+        if not valid_evaluator[o]:
+            continue  # failed evaluator contributes no row
         v = Weights[o, :n_inputs]
         u = Weights[o, n_inputs:n_inputs+n_outputs]
         u0 = Weights[o, -1]
-        
+
         for j in range(n_dmus):
             # Inefficiency of DMU j evaluated using DMU o's optimal weights
             inefficiency = np.dot(X_norm[j], v) - np.dot(Y_norm[j], u) + u0
-            # Cross-Efficiency score clipped to a minimum of 0.0 [P0-8]
+            # Cross-Efficiency score clipped to a minimum of 0.0
             CE_matrix[o, j] = max(0.0, 1.0 - inefficiency)
 
-    # Phase 3: Aggregate Cross-Efficiency
+    # Phase 3: Aggregate Cross-Efficiency over VALID evaluators only
     for j in range(n_dmus):
-        # Average of how all peers scored DMU j
-        avg_ce = np.mean(CE_matrix[:, j])
+        if n_valid > 0:
+            avg_ce = CE_matrix[valid_evaluator, j].mean()
+        else:
+            # Degenerate fallback: no valid evaluator at all -> use self score.
+            avg_ce = dmus[j]["self_score"]
         dmus[j]["dea_score"] = max(0.0, min(1.0, avg_ce))
 
     # Prepare batch update for Column K (Watchlist!K)
@@ -201,6 +223,8 @@ def main():
         json.dump(dea_scores, f, indent=2)
     os.replace(tmp_path, DEA_SCORES_FILE)
     print("Local DEA scores database updated.")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.exit(main() or 0)

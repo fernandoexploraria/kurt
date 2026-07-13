@@ -17,6 +17,10 @@ ORDERS_FILE = "/root/.openclaw/workspace/memory/pending_orders.json"
 
 DEFAULT_ATR_MULTIPLIER = 3.0 # Standardized fallback multiplier for unoptimized assets [P0-5]
 
+# DPI direction (see script 6 for full note). True = high DPI is a headwind.
+# Behavior unchanged; only the sign is centralized/flippable here.
+DPI_HIGH_IS_BEARISH = True
+
 def load_cache():
     if os.path.exists(CACHE_FILE):
         try:
@@ -38,17 +42,37 @@ def save_cache(cache):
     with open(CACHE_FILE, 'w') as f:
         json.dump(cache, f, indent=2)
 
-def run_subprocess(cmd):
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+import tempfile
+def save_json_atomic(data, path):
+    """Atomic temp-file + os.replace write to prevent truncation [P0-6]."""
+    dir_name = os.path.dirname(path)
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
+    with tempfile.NamedTemporaryFile('w', dir=dir_name, delete=False) as tf:
+        temp_path = tf.name
+        json.dump(data, tf, indent=2)
+        tf.flush()
+        os.fsync(tf.fileno())
+    os.chmod(temp_path, 0o644)
+    os.replace(temp_path, path)
+
+def run_gog(args_list):
+    """UPGRADE P0-4: list-based gog invocation with shell=False (no injection)."""
+    env = os.environ.copy()
+    env["GOG_ACCOUNT"] = ACCOUNT
+    cmd_list = ["gog", "sheets"] + args_list
+    result = subprocess.run(cmd_list, env=env, shell=False, capture_output=True, text=True)
     if result.returncode != 0:
         return None
-    return result.stdout.strip()
+    try:
+        return json.loads(result.stdout.strip())
+    except:
+        return None
 
 def get_positions():
-    cmd = f"GOG_ACCOUNT={ACCOUNT} gog sheets get {TEST_SHEET_ID} 'Positions!A4:K50' --json"
-    out = run_subprocess(cmd)
-    if not out: return []
-    data = json.loads(out)
+    data = run_gog(["get", TEST_SHEET_ID, "Positions!A4:K50", "--json"])
+    if data is None:
+        return None  # read failure (distinct from a legitimately empty book)
     tickers = []
     for i, row in enumerate(data.get('values', [])):
         if len(row) > 0 and row[0].strip() and row[0].strip().upper() not in ["CASH", "TICKER"]:
@@ -146,11 +170,12 @@ def get_quiver_adjustments(ticker, shield_cache):
     modifier = 1.0 
     shield_data = shield_cache.get(ticker, {})
     
-    # 1. Dark Pool Index (DPI) Adjustments
+    # 1. Dark Pool Index (DPI) Adjustments (direction via DPI_HIGH_IS_BEARISH;
+    #    behavior unchanged — only DPI > 0.50 moves the modifier).
     latest_dpi = shield_data.get("dpi", 0.5)
     if latest_dpi > 0.50:
-        reduction = (latest_dpi - 0.50) * 0.2
-        modifier -= min(reduction, 0.05)
+        shift = min((latest_dpi - 0.50) * 0.2, 0.05)
+        modifier += -shift if DPI_HIGH_IS_BEARISH else shift
 
     # 2. Congressional Conviction Score Adjustments
     score = shield_data.get("score", 50)
@@ -162,50 +187,51 @@ def get_quiver_adjustments(ticker, shield_cache):
 
 def update_sheet(row, target_price, floor_price, atr_val):
     today = datetime.now().strftime("%Y-%m-%d")
-    run_subprocess(f"GOG_ACCOUNT={ACCOUNT} gog sheets update {TEST_SHEET_ID} 'Positions!G{row}' --values-json '[[{target_price}]]' --input USER_ENTERED")
-    run_subprocess(f"GOG_ACCOUNT={ACCOUNT} gog sheets update {TEST_SHEET_ID} 'Positions!H{row}' --values-json '[[\"=(G{row}-D{row})/D{row}\"]]' --input USER_ENTERED")
-    run_subprocess(f"GOG_ACCOUNT={ACCOUNT} gog sheets update {TEST_SHEET_ID} 'Positions!I{row}' --values-json '[[\"{today}\"]]' --input USER_ENTERED")
-    run_subprocess(f"GOG_ACCOUNT={ACCOUNT} gog sheets update {TEST_SHEET_ID} 'Positions!J{row}' --values-json '[[{atr_val}]]' --input USER_ENTERED")
-    run_subprocess(f"GOG_ACCOUNT={ACCOUNT} gog sheets update {TEST_SHEET_ID} 'Positions!K{row}' --values-json '[[{floor_price}]]' --input USER_ENTERED")
+    # json.dumps each payload so cell content can never break shell/JSON quoting.
+    run_gog(["update", TEST_SHEET_ID, f"Positions!G{row}", "--values-json", json.dumps([[target_price]]), "--input", "USER_ENTERED"])
+    run_gog(["update", TEST_SHEET_ID, f"Positions!H{row}", "--values-json", json.dumps([[f"=(G{row}-D{row})/D{row}"]]), "--input", "USER_ENTERED"])
+    run_gog(["update", TEST_SHEET_ID, f"Positions!I{row}", "--values-json", json.dumps([[today]]), "--input", "USER_ENTERED"])
+    run_gog(["update", TEST_SHEET_ID, f"Positions!J{row}", "--values-json", json.dumps([[atr_val]]), "--input", "USER_ENTERED"])
+    run_gog(["update", TEST_SHEET_ID, f"Positions!K{row}", "--values-json", json.dumps([[floor_price]]), "--input", "USER_ENTERED"])
 
 def sync_pending_orders(results):
+    """
+    Syncs ONLY take-profit (SELL) traps to the calibrated ceiling.
+
+    STOP_LOSS traps are now synced by build_radar.py against the CANONICAL
+    radar floor. Previously this script synced STOP_LOSS to its own ratchet
+    floor (price - m*ATR), which could diverge from the radar floor that
+    build_radar writes to column K -- leaving the executor holding a stop at
+    a different price than the radar. Single owner per trap type removes that.
+    """
     if not os.path.exists(ORDERS_FILE):
         return
     try:
         with open(ORDERS_FILE, 'r') as f:
             orders = json.load(f)
-    except:
+    except Exception as e:
+        print(f"  [!] Failed to load pending orders: {e}")
         return
-        
+
     updated = False
-    print("\n=== SYNCHRONIZING EXIT TRAPS (SELL / STOP_LOSS) ===")
-    
+    print("\n=== SYNCHRONIZING TAKE-PROFIT (SELL) TRAPS ===")
     target_lookup = {r['ticker']: r['target'] for r in results}
-    floor_lookup = {r['ticker']: r['floor'] for r in results}
 
     for ticker, data in orders.items():
-        if data.get("status") == "waiting":
-            if data.get("action") == "SELL" and ticker in target_lookup:
-                old_price = data.get("target_price")
-                new_price = target_lookup[ticker]
-                if old_price != new_price:
-                    print(f"  [Sync] Updating {ticker} TAKE_PROFIT Trap: ${old_price} -> ${new_price}")
-                    data["target_price"] = new_price
-                    updated = True
-            elif data.get("action") == "STOP_LOSS" and ticker in floor_lookup:
-                old_price = data.get("target_price")
-                new_price = floor_lookup[ticker]
-                if old_price != new_price:
-                    print(f"  [Sync] Updating {ticker} STOP_LOSS Trap: ${old_price} -> ${new_price}")
-                    data["target_price"] = new_price
-                    updated = True
-                    
+        if (data.get("status") == "waiting" and data.get("action") == "SELL"
+                and ticker in target_lookup):
+            old_price = data.get("target_price")
+            new_price = target_lookup[ticker]
+            if old_price != new_price:
+                print(f"  [Sync] Updating {ticker} TAKE_PROFIT Trap: ${old_price} -> ${new_price}")
+                data["target_price"] = new_price
+                updated = True
+
     if updated:
-        with open(ORDERS_FILE, 'w') as f:
-            json.dump(orders, f, indent=2)
-        print("  [✓] All exit traps synchronized successfully.")
+        save_json_atomic(orders, ORDERS_FILE)
+        print("  [✓] Take-profit traps synchronized (atomic).")
     else:
-        print("  [-] No waiting exit traps required updating.")
+        print("  [-] No waiting take-profit traps required updating.")
 
 def main():
     print("Starting UNIFIED V2.1 Target Calibration (Dynamic ATR, Ceilings, and Ratchet Floors)...")
@@ -222,6 +248,9 @@ def main():
         except: pass
 
     tickers = get_positions()
+    if tickers is None:
+        print("🚨 Positions read failed. Leaving yesterday's targets/floors in force.")
+        return 1
     results = []
 
     for item in tickers:
@@ -284,6 +313,8 @@ def main():
     for r in results: print(f"{r['ticker']} - Ceiling: ${r['target']} | Floor: ${r['floor']}")
 
     sync_pending_orders(results)
+    return 0
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.exit(main() or 0)
