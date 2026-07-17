@@ -33,6 +33,7 @@ def save_state(state):
 def get_batch_prices(symbols):
     """Fetches real-time prices for a list of symbols in chunks of 10."""
     prices = {}
+    import time
     
     # TradingView batch endpoint allows max 10 symbols per request
     chunk_size = 10
@@ -58,21 +59,24 @@ def get_batch_prices(symbols):
         }
         
         url = f"https://{RAPIDAPI_HOST}/api/quote/batch"
-        try:
-            response = requests.post(url, json=payload, headers=headers, timeout=10)
-            data = response.json()
-            if data.get("success"):
-                results = data.get("data", {}).get("data", [])
-                for res in results:
-                    if res.get("success"):
-                        # TV returns the symbol back like "NASDAQ:AAPL", we need to map it back
-                        symbol_resp = res.get("symbol", "")
-                        raw_ticker = symbol_resp.split(":")[-1] if ":" in symbol_resp else symbol_resp
-                        lp = res.get("data", {}).get("lp")
-                        if lp:
-                            prices[raw_ticker] = lp
-        except Exception:
-            pass
+        for attempt in range(3):
+            try:
+                response = requests.post(url, json=payload, headers=headers, timeout=10)
+                data = response.json()
+                if data.get("success"):
+                    results = data.get("data", {}).get("data", [])
+                    for res in results:
+                        if res.get("success"):
+                            # TV returns the symbol back like "NASDAQ:AAPL", we need to map it back
+                            symbol_resp = res.get("symbol", "")
+                            raw_ticker = symbol_resp.split(":")[-1] if ":" in symbol_resp else symbol_resp
+                            lp = res.get("data", {}).get("lp")
+                            if lp:
+                                prices[raw_ticker] = lp
+                    break
+            except Exception:
+                if attempt < 2:
+                    time.sleep(2)
             
     return prices
 
@@ -81,13 +85,21 @@ def main():
 
     env = os.environ.copy()
     env["GOG_ACCOUNT"] = "fernando@exploraria.ai"
-    res = subprocess.run(
-        ["/usr/local/bin/gog", "sheets", "get", "1kjzfc6uEzBFtmNjlU1x3TVbHuWPgY7jnNce8mNTe66I", "Watchlist!A:D", "--json"], 
-        env=env, 
-        capture_output=True, text=True
-    )
+    import time
+    
+    res = None
+    for attempt in range(3):
+        res = subprocess.run(
+            ["/usr/local/bin/gog", "sheets", "get", "1kjzfc6uEzBFtmNjlU1x3TVbHuWPgY7jnNce8mNTe66I", "Watchlist!A:D", "--json"], 
+            env=env, 
+            capture_output=True, text=True
+        )
+        if res.returncode == 0:
+            break
+        if attempt < 2:
+            time.sleep(2)
 
-    if res.returncode != 0:
+    if not res or res.returncode != 0:
         print("NO_REPLY")
         exit(0)
 

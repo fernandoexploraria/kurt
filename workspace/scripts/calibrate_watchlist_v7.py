@@ -278,7 +278,7 @@ def get_beta(ticker, cache):
     return 1.05
 
 def get_watchlist():
-    out = run_gog(["get", TEST_SHEET_ID, "Watchlist!A2:H50", "--json"])
+    out = run_gog(["get", TEST_SHEET_ID, "Watchlist!A2:H200", "--json"])
     if not out: return []
     data = out
     tickers = []
