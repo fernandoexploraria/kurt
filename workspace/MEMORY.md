@@ -168,3 +168,12 @@ Deprecate optimize_entries.py: The cron has been disabled as of 2026-06-14. Its 
 **Strategic Insight:** Cash-equivalent Treasury ETFs (like SGOV, BIL, SHV) follow a mechanical "saw-tooth" price pattern due to daily interest accrual and monthly ex-dividend drops. 
 **Directive:** Standard volatility-based trailing stops or automated sell limits must NEVER be applied to them, as the mechanical dividend drop will falsely trigger a liquidation of the "Safe Anchor" in our 90/10 Barbell Strategy.
 **Execution:** A hardcoded "Cash Shield" exception exists in both the Intraday and Limit Sniper scripts. If an automated sell or stop-loss is triggered for SGOV/BIL/SHV, the scripts will log `aborted_cash_shield` and refuse to liquidate the position.
+
+### The JIT Execution Shield (2026-07-18)
+**Strategic Insight:** The `transition_matrix_live.py` script measures 1-minute high-frequency return probabilities to detect structural regime changes via Jensen-Shannon Divergence (JSD). It separates normal "market breathing" from institutional "falling knives" or "blow-off tops". Because its predictive power decays in minutes, it cannot be run as a batch process.
+**Directive:** This script is the ultimate mathematical point-of-the-spear shield. It MUST be run "Just-In-Time" (JIT) immediately prior to deploying capital or taking profits.
+**Execution:**
+1.  **Before executing any Trap (`set_trap.py`) or Immediate Order (`inject_immediate.py`):** Kurt must automatically run `python3 /root/.openclaw/workspace/scripts/transition_matrix_live.py --ticker <TICKER>`.
+2.  **Stable Regime (JSD < 0.15):** The price action is normal. Kurt will proceed with the execution and report the green light.
+3.  **Regime Divergence (JSD > 0.15):** The mathematical structure of the stock has broken. Kurt MUST actively block the execution, alert Fer with the JSD metric, and require an explicit manual override before proceeding.
+4.  **Full Arsenal Integration:** The JSD output must be included as the final quantitative tie-breaker in any Full Arsenal analysis.
