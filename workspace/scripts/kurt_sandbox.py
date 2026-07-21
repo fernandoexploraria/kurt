@@ -47,7 +47,7 @@ def load_json(path):
             with open(path, 'r') as f:
                 return json.load(f)
         except: pass
-    return {}
+    return dict()
 
 def save_json_atomic(data, path):
     """Writes state files atomically to prevent corruption during mid-run crashes."""
@@ -100,7 +100,7 @@ def calculate_atr(candles, current_idx):
     if current_idx < 14:
         return 1.0
     
-    trs =
+    trs = list()
     start_idx = current_idx - 13
     if start_idx < 1:
         start_idx = 1
@@ -161,20 +161,21 @@ def push_to_dashboard(summary_stats):
     print("Writing simulation summary to Google Sheets (Replay_Dashboard tab)...")
     
     # Prepare payload grid
-    payload =,
-        ["-------------------------", "", "", ""],
-        ["Initial Paper Cash", f"${summary_stats['initial_cash']:,.2f}", "End Date", summary_stats["end_date"]],
-        ["Final Paper Cash", f"${summary_stats['final_cash']:,.2f}", "Trailing Multiplier Used", f"{summary_stats['atr_multiplier']}x ATR"],
-        ["Final Portfolio Value", f"${summary_stats['final_equity']:,.2f}", "Loser Leash Engaged", str(summary_stats["loser_leash"])],
-       :.2f}%", "DPI Bearish Flag", str(summary_stats["dpi_bearish"])],
-       :.2f}%", "", ""],
-       ), "", ""],
-       :.2f}%", "", ""],
-       :.2f}", "", ""]
+    payload = list()
+    payload.append()
+    payload.append(["-------------------------", "", "", ""])
+    payload.append(["Initial Paper Cash", f"${summary_stats['initial_cash']:,.2f}", "End Date", summary_stats["end_date"]])
+    payload.append(["Final Paper Cash", f"${summary_stats['final_cash']:,.2f}", "Trailing Multiplier Used", f"{summary_stats['atr_multiplier']}x ATR"])
+    payload.append(["Final Portfolio Value", f"${summary_stats['final_equity']:,.2f}", "Loser Leash Engaged", str(summary_stats["loser_leash"])])
+    payload.append(:.2f}%", "DPI Bearish Flag", str(summary_stats["dpi_bearish"])])
+    payload.append(:.2f}%", "", ""])
+    payload.append(}", "", ""])
+    payload.append(:.2f}%", "", ""])
+    payload.append(:.2f}", "", ""])
     
     safe_payload = json.dumps(payload)
     # Clear old dashboard values first
-    run_gog(]"])
+    run_gog()
     # Write new summary
     run_gog()
     print("  [✓] Replay_Dashboard successfully updated.")
@@ -218,7 +219,7 @@ def main():
     print(f"Simulation Range: {start_dt.strftime('%Y-%m-%d')} to {end_dt.strftime('%Y-%m-%d')} ({args.days} Days)")
     
     # Ingest historical candles per symbol
-    market_data = {}
+    market_data = dict()
     for ticker in tickers_list:
         prefix = exchange_cache.get(ticker, "NASDAQ:")
         symbol = f"{prefix}{ticker}"
@@ -234,7 +235,7 @@ def main():
         
         # Filter candles within simulation date range, keeping ATR warmup cushions
         warmup_idx = -1
-        sim_candles =
+        sim_candles = list()
         for idx, candle in enumerate(candles):
             # Parse TradingView time (handles string dates or raw timestamps)
             c_time_str = candle.get("time") or candle.get("date")
@@ -264,11 +265,11 @@ def main():
 
     # Initialize Simulated Portfolio State
     virtual_cash = args.initial_cash
-    virtual_positions = {}  # {ticker: {"shares": n, "avg_cost": x, "highest_seen": y}}
-    transactions_log =
+    virtual_positions = dict()  # {ticker: {"shares": n, "avg_cost": x, "highest_seen": y}}
+    transactions_log = list()
     peak_portfolio_value = args.initial_cash
     min_portfolio_value = args.initial_cash
-    daily_values =
+    daily_values = list()
     
     # Extract relative DEA cohort scores for watchlist weighting
     dea_cohort = sorted(
