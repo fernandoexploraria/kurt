@@ -67,7 +67,7 @@ def save_json_atomic(data, path):
 def run_gog(args_list):
     """Executes 'gog sheets' securely with an isolated environment map (shell=False)."""
     env = os.environ.copy()
-    env = ACCOUNT
+    env["GOG_ACCOUNT"] = ACCOUNT
 
     cmd_list = ["gog", "sheets"] + args_list
     result = subprocess.run(cmd_list, env=env, shell=False, capture_output=True, text=True)
@@ -142,7 +142,7 @@ def compute_dea_size_multiplier(ticker, dea_cache, cohort_scores):
         return 1.0
 
     score = float(dea_cache[ticker].get("dea_score", 0.0)) * 100.0
-    lo, hi = cohort_scores, cohort_scores[-1]
+    lo, hi = cohort_scores[0], cohort_scores[-1]
     if (hi - lo) < 1.0:
         return 1.0
 
@@ -156,29 +156,91 @@ def compute_dea_size_multiplier(ticker, dea_cache, cohort_scores):
         
     return round(max(0.5, min(1.25, mult)), 3)
 
-def push_to_dashboard(summary_stats):
-    """Writes a clean compiled summary directly to the Replay_Dashboard tab."""
-    print("Writing simulation summary to Google Sheets (Replay_Dashboard tab)...")
+def ensure_tabs_exist():
+    """Checks if the Replay tabs exist, and creates them if missing."""
+    metadata = run_gog(["metadata", LIVE_SHEET_ID, "--json"])
+    if not metadata:
+        print("  [!] Warning: Failed to fetch metadata to verify tabs.")
+        return
+        
+    existing_titles = [s["properties"]["title"] for s in metadata.get("sheets", [])]
     
-    # Prepare payload grid
+    if "Replay_Dashboard" not in existing_titles:
+        print("Creating 'Replay_Dashboard' tab...")
+        run_gog(["add-tab", LIVE_SHEET_ID, "Replay_Dashboard"])
+
+    if "Replay_Leaderboard" not in existing_titles:
+        print("Creating 'Replay_Leaderboard' tab...")
+        run_gog(["add-tab", LIVE_SHEET_ID, "Replay_Leaderboard"])
+        # Add headers to the new leaderboard
+        headers = [["Timestamp", "Tickers", "Start Date", "End Date", "Initial Cash", "Final Equity", "Total Return (%)", "Win Rate (%)", "Trades Count", "Max Drawdown (%)", "Sharpe", "ATR Mult", "Loser Leash", "DPI Bearish"]]
+        run_gog(["update", LIVE_SHEET_ID, "Replay_Leaderboard!A1", f"--values-json={json.dumps(headers)}"])
+        
+    if "Replay_Current_Tx" not in existing_titles:
+        print("Creating 'Replay_Current_Tx' tab...")
+        run_gog(["add-tab", LIVE_SHEET_ID, "Replay_Current_Tx"])
+
+def push_to_dashboard(summary_stats, transactions_log):
+    """Writes compiled summary and detailed transactions directly to Google Sheets."""
+    print("Verifying Replay tabs in Google Sheets...")
+    ensure_tabs_exist()
+    
+    # 1. Update Replay_Dashboard (Quick Summary)
+    print("Updating Replay_Dashboard...")
     payload = list()
-    payload.append()
+    payload.append(["Simulation Summary", "", "", ""])
     payload.append(["-------------------------", "", "", ""])
     payload.append(["Initial Paper Cash", f"${summary_stats['initial_cash']:,.2f}", "End Date", summary_stats["end_date"]])
     payload.append(["Final Paper Cash", f"${summary_stats['final_cash']:,.2f}", "Trailing Multiplier Used", f"{summary_stats['atr_multiplier']}x ATR"])
     payload.append(["Final Portfolio Value", f"${summary_stats['final_equity']:,.2f}", "Loser Leash Engaged", str(summary_stats["loser_leash"])])
-    payload.append(:.2f}%", "DPI Bearish Flag", str(summary_stats["dpi_bearish"])])
-    payload.append(:.2f}%", "", ""])
-    payload.append(}", "", ""])
-    payload.append(:.2f}%", "", ""])
-    payload.append(:.2f}", "", ""])
+    payload.append(["Total Return", f"{summary_stats['total_return_pct']:.2f}%", "DPI Bearish Flag", str(summary_stats["dpi_bearish"])])
+    payload.append(["Win Rate", f"{summary_stats['win_rate_pct']:.2f}%", "", ""])
+    payload.append(["Trades Count", f"{summary_stats['trades_count']}", "", ""])
+    payload.append(["Max Drawdown", f"{summary_stats['max_dd_pct']:.2f}%", "", ""])
+    payload.append(["Sharpe Ratio", f"{summary_stats['sharpe']:.2f}", "", ""])
     
-    safe_payload = json.dumps(payload)
-    # Clear old dashboard values first
-    run_gog()
-    # Write new summary
-    run_gog()
+    run_gog(["clear", LIVE_SHEET_ID, "Replay_Dashboard!A1:D20"])
+    run_gog(["update", LIVE_SHEET_ID, "Replay_Dashboard!A1", f"--values-json={json.dumps(payload)}"])
     print("  [✓] Replay_Dashboard successfully updated.")
+    
+    # 2. Update Replay_Current_Tx (Detailed Transactions of Current Run)
+    print("Updating Replay_Current_Tx...")
+    tx_payload = [["Date", "Action", "Ticker", "Shares", "Price", "Value", "Notes"]]
+    for tx in transactions_log:
+        tx_payload.append([
+            tx.get("date", ""),
+            tx.get("action", ""),
+            tx.get("ticker", ""),
+            tx.get("shares", 0),
+            tx.get("price", 0.0),
+            tx.get("value", 0.0),
+            tx.get("notes", "")
+        ])
+    run_gog(["clear", LIVE_SHEET_ID, "Replay_Current_Tx!A1:G500"])
+    run_gog(["update", LIVE_SHEET_ID, "Replay_Current_Tx!A1", f"--values-json={json.dumps(tx_payload)}"])
+    print("  [✓] Replay_Current_Tx successfully updated.")
+    
+    # 3. Append to Replay_Leaderboard (Rolling Multi-Factor History)
+    print("Appending summary to Replay_Leaderboard...")
+    timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    leaderboard_row = [[
+        timestamp_str,
+        summary_stats.get("tickers", ""),
+        summary_stats.get("start_date", ""),
+        summary_stats.get("end_date", ""),
+        summary_stats.get("initial_cash", 0.0),
+        summary_stats.get("final_equity", 0.0),
+        round(summary_stats.get("total_return_pct", 0.0), 2),
+        round(summary_stats.get("win_rate_pct", 0.0), 2),
+        summary_stats.get("trades_count", 0),
+        round(summary_stats.get("max_dd_pct", 0.0), 2),
+        round(summary_stats.get("sharpe", 0.0), 2),
+        summary_stats.get("atr_multiplier", 3.0),
+        str(summary_stats.get("loser_leash", True)),
+        str(summary_stats.get("dpi_bearish", True))
+    ]]
+    run_gog(["append", LIVE_SHEET_ID, "Replay_Leaderboard!A:N", f"--values-json={json.dumps(leaderboard_row)}"])
+    print("  [✓] Replay_Leaderboard successfully appended.")
 
 def main():
     parser = argparse.ArgumentParser(description="Kurt Standalone Online Replay Service")
@@ -232,6 +294,9 @@ def main():
         if not candles:
             print(f"  [!] Failed to fetch price history for {ticker}. Aborting.")
             return 1
+            
+        # Sort candles oldest-to-newest to fix ATR index math
+        candles = sorted(candles, key=lambda x: x.get("time") or x.get("date"))
         
         # Filter candles within simulation date range, keeping ATR warmup cushions
         warmup_idx = -1
@@ -291,7 +356,7 @@ def main():
         for ticker in tickers_list:
             ticker_data = market_data[ticker]
             # Find the candle for this ticker on current_dt
-            candle_entry = next((item for item in ticker_data["sim_candles"] if item[1] == current_dt), None)
+            candle_entry = next((item for item in ticker_data["sim_candles"] if item[2] == current_dt), None)
             if not candle_entry:
                 continue
                 
@@ -395,20 +460,23 @@ def main():
             # 2. EVALUATE PROSPECTIVE BUY OPPORTUNITIES (Sniper entries)
             # ----------------------------------------------------
             else:
-                # Calculate entry limit trap for today
+                # Calculate entry limit trap for today using yesterday's data
+                prev_candle = ticker_data["all_candles"][global_idx - 1]
+                prev_close = float(prev_candle["close"])
+                prev_atr = calculate_atr(ticker_data["all_candles"], global_idx - 1)
+
                 modifier = get_quiver_adjustments(ticker, shield_cache, dpi_bearish)
-                base_floor = float(opt.get("total_return_pct", 0.0) / 100.0) * close_p + close_p
-                if base_floor <= 0 or base_floor >= close_p:
-                    base_floor = close_p - (2.0 * atr)
+                pullback_pct = float(opt.get("total_return_pct", 2.0)) / 100.0
+                base_floor = prev_close - (pullback_pct * prev_close)
+                if base_floor <= 0 or base_floor >= prev_close:
+                    base_floor = prev_close - (1.5 * prev_atr)
                     
                 target_entry = round(base_floor * modifier, 2)
                 
-                # Sanity check: entry price must be at least 1 ATR discount below close
-                if target_entry > (close_p - atr):
-                    target_entry = round(close_p - atr, 2)
-                    if target_entry <= 0:
-                        target_entry = round(close_p * 0.50, 2)
-                        
+                # Sanity check: entry price must be at least 1 ATR discount below previous close
+                if target_entry > (prev_close - prev_atr):
+                    target_entry = round(prev_close - prev_atr, 2)
+                
                 # Check buy trigger: Low wick drops to or below the Sniper target price
                 if low_p <= target_entry and target_entry > 0:
                     entry_price = open_p if open_p < target_entry else target_entry
@@ -425,8 +493,8 @@ def main():
                     for tick, active_pos in virtual_positions.items():
                         t_candles = market_data[tick]["sim_candles"]
                         # find the close of tick on current_dt
-                        c_ent = next((item for item in t_candles if item[1] == current_dt), None)
-                        current_close = float(c_ent[2]["close"]) if c_ent else float(market_data[tick]["all_candles"][-1]["close"])
+                        c_ent = next((item for item in t_candles if item[2] == current_dt), None)
+                        current_close = float(c_ent[1]["close"]) if c_ent else float(market_data[tick]["all_candles"][-1]["close"])
                         portfolio_equity += active_pos["shares"] * current_close
                         
                     max_capital_allowed = portfolio_equity * 0.10
@@ -484,9 +552,9 @@ def main():
         for tick, pos in virtual_positions.items():
             # Find the close price of this tick on current_dt
             tick_data = market_data[tick]
-            c_entry = next((item for item in tick_data["sim_candles"] if item[1] == current_dt), None)
+            c_entry = next((item for item in tick_data["sim_candles"] if item[2] == current_dt), None)
             if c_entry:
-                current_close = float(c_entry[2]["close"])
+                current_close = float(c_entry[1]["close"])
             else:
                 current_close = float(tick_data["all_candles"][-1]["close"])
             current_equity += pos["shares"] * current_close
@@ -543,6 +611,7 @@ def main():
     
     # Compile summary object
     summary_stats = {
+        "tickers": ", ".join(tickers_list),
         "start_date": args.start_date,
         "end_date": end_dt.strftime("%Y-%m-%d"),
         "initial_cash": args.initial_cash,
@@ -569,7 +638,7 @@ def main():
         print(f"  [✓] Transactions logged to {REPLAY_TRANSACTIONS_FILE}")
         
     # Push the compiled post-run summary to Google Sheets Replay_Dashboard tab
-    push_to_dashboard(summary_stats)
+    push_to_dashboard(summary_stats, transactions_log)
     return 0
 
 if __name__ == "__main__":
