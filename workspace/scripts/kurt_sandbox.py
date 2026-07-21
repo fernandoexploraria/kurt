@@ -187,11 +187,12 @@ def push_to_dashboard(summary_stats, transactions_log):
     
     # 1. Update Replay_Dashboard (Quick Summary)
     print("Updating Replay_Dashboard...")
+    mult_label = f"Forced {summary_stats['atr_multiplier']}x ATR" if summary_stats.get("is_forced") else f"Calibrated (Default {summary_stats['atr_multiplier']}x)"
     payload = list()
     payload.append(["Simulation Summary", "", "", ""])
     payload.append(["-------------------------", "", "", ""])
     payload.append(["Initial Paper Cash", f"${summary_stats['initial_cash']:,.2f}", "End Date", summary_stats["end_date"]])
-    payload.append(["Final Paper Cash", f"${summary_stats['final_cash']:,.2f}", "Trailing Multiplier Used", f"{summary_stats['atr_multiplier']}x ATR"])
+    payload.append(["Final Paper Cash", f"${summary_stats['final_cash']:,.2f}", "Trailing Multiplier Used", mult_label])
     payload.append(["Final Portfolio Value", f"${summary_stats['final_equity']:,.2f}", "Loser Leash Engaged", str(summary_stats["loser_leash"])])
     payload.append(["Total Return", f"{summary_stats['total_return_pct']:.2f}%", "DPI Bearish Flag", str(summary_stats["dpi_bearish"])])
     payload.append(["Win Rate", f"{summary_stats['win_rate_pct']:.2f}%", "", ""])
@@ -235,7 +236,7 @@ def push_to_dashboard(summary_stats, transactions_log):
         summary_stats.get("trades_count", 0),
         round(summary_stats.get("max_dd_pct", 0.0), 2),
         round(summary_stats.get("sharpe", 0.0), 2),
-        summary_stats.get("atr_multiplier", 3.0),
+        f"Forced {summary_stats.get('atr_multiplier')}" if summary_stats.get("is_forced") else f"Calibrated ({summary_stats.get('atr_multiplier')})",
         str(summary_stats.get("loser_leash", True)),
         str(summary_stats.get("dpi_bearish", True))
     ]]
@@ -249,6 +250,7 @@ def main():
     parser.add_argument("--days", type=int, default=60, help="Simulation duration in calendar days")
     parser.add_argument("--initial_cash", type=float, default=20000.0, help="Paper cash balance")
     parser.add_argument("--atr_multiplier", type=float, default=3.0, help="Exit trailing ATR multiplier")
+    parser.add_argument("--force_multiplier", type=float, default=None, help="Force a specific ATR multiplier for exits and sizing, overriding calibrated defaults")
     parser.add_argument("--loser_leash", type=str, default="True", help="Engage tight Loser Leash on underwater trades (True/False)")
     parser.add_argument("--dpi_bearish", type=str, default="True", help="High DPI is bearish headwind (True/False)")
     parser.add_argument("--timeframe", type=str, default="D", help="Candlestick timeframe (D, 60, etc.)")
@@ -393,8 +395,10 @@ def main():
                     drop_amount = round(entry_price - current_floor, 2)
                 else:
                     # Risk Rule B: Standard Trailing Stop (High vs. Low Beta)
-                    if beta >= BETA_THRESHOLD:
-                        multiplier = args.atr_multiplier
+                    if args.force_multiplier is not None:
+                        multiplier = args.force_multiplier
+                    elif beta >= BETA_THRESHOLD:
+                        multiplier = opt.get("exit_multiplier_used", args.atr_multiplier)
                     else:
                         multiplier = LOW_BETA_MULTIPLIER
                     drop_amount = round(atr * multiplier, 2)
@@ -510,7 +514,10 @@ def main():
                         catalyst_multiplier = 1.00
                     
                     risk_dollar_amount = portfolio_equity * (0.01 * catalyst_multiplier * regime_multiplier * dea_multiplier)
-                    m_val = opt.get("exit_multiplier_used", 3.0)
+                    if args.force_multiplier is not None:
+                        m_val = args.force_multiplier
+                    else:
+                        m_val = opt.get("exit_multiplier_used", args.atr_multiplier)
                     
                     target_shares = 0
                     if atr > 0 and m_val > 0 and risk_dollar_amount > 0:
@@ -570,7 +577,7 @@ def main():
     final_equity = virtual_cash
     for tick, pos in virtual_positions.items():
         t_candles = market_data[tick]["sim_candles"]
-        current_close = float(t_candles[-1][2]["close"])
+        current_close = float(t_candles[-1][1]["close"])
         final_equity += pos["shares"] * current_close
         
     total_return_pct = ((final_equity - args.initial_cash) / args.initial_cash) * 100.0
@@ -617,7 +624,8 @@ def main():
         "initial_cash": args.initial_cash,
         "final_cash": virtual_cash,
         "final_equity": final_equity,
-        "atr_multiplier": args.atr_multiplier,
+        "atr_multiplier": args.force_multiplier if args.force_multiplier is not None else args.atr_multiplier,
+        "is_forced": args.force_multiplier is not None,
         "loser_leash": loser_leash,
         "dpi_bearish": dpi_bearish,
         "total_return_pct": total_return_pct,
