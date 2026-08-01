@@ -178,7 +178,7 @@ Deprecate optimize_entries.py: The cron has been disabled as of 2026-06-14. Its 
 
 `python3 /root/.openclaw/workspace/scripts/transition_matrix_live.py --ticker <TICKER> --source yfinance --mode live --action <new-long|add-long|new-short> --format json --compact-json`
 
-**Risk-Reducing Orders:** For profit-taking, stop-loss, long reduction, or short covering, pass the corresponding action (`sell-profit`, `stop-loss`, `reduce-long`, or `cover-short`). Model uncertainty or a high anomaly must not prevent an urgent risk-reducing transaction. The result may warn, but the execution path remains available subject to the normal live-quote and confirmation controls.
+**Risk-Reducing  Orders:** For profit-taking, stop-loss, long reduction, or short covering, pass the corresponding action (`sell-profit`, `stop-loss`, `reduce-long`, or `cover-short`). Model uncertainty or a high anomaly must not prevent an urgent risk-reducing transaction. The result may warn, but the execution path remains available subject to the normal live-quote and confirmation controls.
 
 **Decision and Exit-Code Contract:**
 1. `PASS` / exit `0`: The matched-window diagnostics are within the calibrated range. Proceed under the normal execution protocol.
