@@ -37,3 +37,4 @@ workspace/get-pip.py
 # Ignore loose scratchpad scripts at the root level 
 # (Your files in workspace/scripts/ and workspace/skills/ remain 100% safe!)
 workspace/*.py
+workspace/scripts/replay_output/

@@ -192,3 +192,26 @@ Deprecate optimize_entries.py: The cron has been disabled as of 2026-06-14. Its 
 **Freshness and Time-to-Live:** Honor `valid_until_utc`. Never reuse an expired result. Confirm that the order ticker, action, and current market context match the analysis payload before execution.
 
 **Full Arsenal Integration:** Include the structured decision, composite anomaly percentile, joint-transition JSD, sequence surprise, directional tail shifts, data-quality status, and analysis ID in the final quantitative synthesis. Do not summarize the output as a guaranteed prediction.
+
+### 🔬 The Replay & Backtesting Simulation Protocol (2026-08-03)
+**Objective:** To maintain rigorous, look-ahead free, and bias-free backtesting that proves the "Proof of Concept" (antifragile barbell strategy and limit-order traps) to Angela.
+
+**The Two Approved Engines:**
+1. **The Sandbox Backtester (`kurt_sandbox_v2.py`):** The official, hardened, point-in-time-aware historical backtester developed and refined with our advisor.
+   - *Use Case:* Bar-by-bar portfolio-wide or ticker-specific historical simulation with trailing stops, loser leashes, and dynamic ATR-based sizing.
+   - *Command:*
+     ```bash
+     python3 /root/.openclaw/workspace/scripts/kurt_sandbox_v2.py --tickers <TICKERS> --start-date <YYYY-MM-DD> --days <DAYS> --factor-mode point-in-time
+     ```
+   - *Spreadsheet integration:* Automatically publishes to the `Replay_Dashboard`, `Replay_Current_Tx`, and `Replay_Leaderboard` tabs to visually prove strategy performance.
+2. **The Dual-Strategy Monte Carlo Simulator (`scripts/simulate_replay.py`):** The official forward-looking and historical simulator to evaluate "Limit Trap vs. Immediate Market Buy" expectations.
+   - *Use Case:* High-velocity, contract-horizon (45-day) probability and expected P&L modeling.
+   - *Command:*
+     ```bash
+     python3 /root/.openclaw/workspace/scripts/simulate_replay.py --ticker <TICKER> --shares <SHARES>
+     ```
+
+**Strict Directives:**
+- **Zero Look-Ahead Bias:** When running historical replays via `kurt_sandbox_v2.py`, always use `--factor-mode point-in-time` with snapshot folders to ensure yesterday's decisions don't use tomorrow's Quiver or DEA scores.
+- **Local-First Safety:** Regular local replays must never modify cloud documents unless explicitly asked by Fer. Publication to Google Sheets must be explicit using the configured publication flags.
+- **No Manual Output Logs:** Replay artifacts are strictly written to `replay_output/` or the designated sandbox memory runs chronologically for seamless A/B comparison.
