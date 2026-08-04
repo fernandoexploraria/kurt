@@ -34,10 +34,15 @@ def get_positions():
         if len(row) > 0 and row[0].strip() and row[0].strip().upper() not in ["CASH", "TICKER"]:
             current_price = 0.0
             target_price = 0.0
+            total_value = 0.0
             pct_to_target = 999.0
             
             if len(row) > 3 and row[3].strip():
                 try: current_price = float(row[3].replace(',', ''))
+                except: pass
+            
+            if len(row) > 4 and row[4].strip():
+                try: total_value = float(row[4].replace(',', ''))
                 except: pass
             
             if len(row) > 6 and row[6].strip():
@@ -51,8 +56,20 @@ def get_positions():
                 "ticker": row[0].strip(),
                 "current_price": current_price,
                 "target_price": target_price,
-                "pct_to_target": pct_to_target
+                "pct_to_target": pct_to_target,
+                "total_value": total_value
             })
+
+    # Cache Top 5 Tickers by Total Value
+    try:
+        sorted_tickers = sorted(tickers, key=lambda x: x.get('total_value', 0.0), reverse=True)
+        top_5 = [t['ticker'] for t in sorted_tickers[:5]]
+        with open('/root/.openclaw/workspace/memory/top_5_cache.txt', 'w') as f:
+            f.write(",".join(top_5))
+        print(f"Cached Top 5 Tickers: {', '.join(top_5)}")
+    except Exception as e:
+        print(f"Failed to cache top 5 tickers: {e}")
+
     return tickers
 
 def get_ta_trend(ticker):

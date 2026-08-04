@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/root/.openclaw/workspace/quant_env/bin/python3
 """
 JIT Transition-Matrix Regime Diagnostic, version 2.0.
 
