@@ -113,6 +113,8 @@ AVGO High Conviction Thesis (2026-05-20): AVGO is a "Proof of Concept" cornersto
 
 SBUX Immediate Entry Alpha (2026-08-04): Replay simulation proved that trying to catch SBUX via a tight limit trap (-1.79% below market) is a reverse-momentum falling knife, leading to a negative expected value (-$3.53) and lower win rate (26% vs 42%). Liquidated SGOV (9 shares) and partial SCHD (9 shares) to fund the immediate market entry of 18 shares of SBUX at $102.03, optimizing capital allocation and efficiency.
 
+Schwab Refresh Day Shift (2026-08-11): Re-authenticated Schwab APIs on Tuesday, August 11th, proactively resetting our 7-day token rotation lifecycle. This establishes Tuesdays as our new weekly target day for re-authentication (the automated 6.0-day warning will fire on Monday evenings to prevent OOO or midweek gaps).
+
 🏰 Saturday Maintenance Log: Update to 2026.5.20 (2026-05-23)
 Upgrade Success: The system was successfully upgraded to version 2026.5.20.
 

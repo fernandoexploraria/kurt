@@ -81,6 +81,12 @@ def refresh_token():
                 res_data["refresh_token"] = refresh_token
                 
             res_data["last_refreshed"] = datetime.now().isoformat()
+            
+            # Preserve the original authorization timestamp and warning flag across refreshes
+            if "auth_timestamp" in tokens:
+                res_data["auth_timestamp"] = tokens["auth_timestamp"]
+            if "warning_sent" in tokens:
+                res_data["warning_sent"] = tokens["warning_sent"]
                 
             with open(TOKENS_FILE, 'w') as f:
                 json.dump(res_data, f, indent=2)
