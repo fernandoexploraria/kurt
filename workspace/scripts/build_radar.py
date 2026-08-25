@@ -95,7 +95,12 @@ def get_positions():
                     avg_cost = float(str(row[2]).replace(',', '').replace('$', '')) if len(row) > 2 and row[2] else 0.0
                     price = float(str(row[3]).replace(',', '').replace('$', '')) if len(row) > 3 and row[3] else 0.0
                     atr = float(str(row[9]).replace(',', '').replace('$', '')) if len(row) > 9 and row[9] else 1.0
-                    active.append({"ticker": ticker, "avg_cost": avg_cost, "price": price, "atr": atr, "row": i + 4, "shares": shares})
+                    static_floor = 0.0
+                    if len(row) > 10 and row[10]:
+                        try:
+                            static_floor = float(str(row[10]).replace(',', '').replace('$', ''))
+                        except: pass
+                    active.append({"ticker": ticker, "avg_cost": avg_cost, "price": price, "atr": atr, "row": i + 4, "shares": shares, "static_floor": static_floor})
             except Exception as e:
                 pass
     return active
@@ -249,6 +254,11 @@ def main():
                 if yesterday_floor > current_floor:
                     print(f"  [🛡️] RATCHET LOCKED: Keeping yesterday's higher floor (${yesterday_floor:.2f}) instead of theoretical (${current_floor:.2f})")
                     current_floor = yesterday_floor
+            
+            static_floor = pos.get("static_floor", 0.0)
+            if static_floor > current_floor:
+                print(f"  [🛡️] STATIC FLOOR LOCKED: Keeping 1AM Hard Floor (${static_floor:.2f}) instead of trailing (${current_floor:.2f})")
+                current_floor = static_floor
             
             new_radar[ticker] = {
                 "beta": round(beta, 2),
