@@ -88,24 +88,27 @@ def main():
     import time
     
     res = None
+    data = None
+    
+    # Strictly use the main Simulator V3 sheet, protected by timeouts and no-input
     for attempt in range(3):
-        res = subprocess.run(
-            ["/usr/local/bin/gog", "sheets", "get", "1kjzfc6uEzBFtmNjlU1x3TVbHuWPgY7jnNce8mNTe66I", "Watchlist!A:D", "--json"], 
-            env=env, 
-            capture_output=True, text=True
-        )
-        if res.returncode == 0:
-            break
+        try:
+            res = subprocess.run(
+                ["/usr/local/bin/gog", "sheets", "get", "1kjzfc6uEzBFtmNjlU1x3TVbHuWPgY7jnNce8mNTe66I", "Watchlist!A:D", "--json", "--no-input"], 
+                env=env, 
+                capture_output=True, text=True,
+                timeout=12
+            )
+            if res.returncode == 0:
+                data = json.loads(res.stdout)
+                break
+        except Exception:
+            pass
+            
         if attempt < 2:
             time.sleep(2)
 
-    if not res or res.returncode != 0:
-        print("NO_REPLY")
-        exit(0)
-
-    try:
-        data = json.loads(res.stdout)
-    except Exception:
+    if not data:
         print("NO_REPLY")
         exit(0)
 
