@@ -3,9 +3,11 @@ import subprocess
 import os
 import requests
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- CONFIGURATION ---
 STATE_FILE = "/root/.openclaw/workspace/memory/snag_state.json"
+CACHE_FILE = "/root/.openclaw/workspace/memory/exchange_cache.json"
 TODAY = datetime.now().strftime("%Y-%m-%d")
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY") # Verified Working Key
 RAPIDAPI_HOST = "tradingview-data1.p.rapidapi.com"
@@ -29,13 +31,34 @@ def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
 
-# --- BATCH PRICE FETCHING ---
-def get_batch_prices(symbols):
-    """Fetches real-time prices for a list of symbols in chunks of 10."""
-    prices = {}
+# --- PARALLEL BATCH PRICE FETCHING ---
+def fetch_chunk(chunk, headers):
+    payload = {
+        "symbols": chunk,
+        "fields": "lp",
+        "session": "regular"
+    }
+    url = f"https://{RAPIDAPI_HOST}/api/quote/batch"
     import time
-    
-    # TradingView batch endpoint allows max 10 symbols per request
+    for attempt in range(3):
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("success"):
+                    return data.get("data", {}).get("data", [])
+        except Exception:
+            pass
+        if attempt < 2:
+            time.sleep(1)
+    return []
+
+def get_batch_prices_parallel(symbols):
+    """Fetches real-time prices for a list of symbols in chunks of 10 in parallel."""
+    prices = {}
+    if not symbols:
+        return prices
+
     chunk_size = 10
     chunks = [symbols[i:i + chunk_size] for i in range(0, len(symbols), chunk_size)]
     
@@ -44,41 +67,36 @@ def get_batch_prices(symbols):
         "x-rapidapi-host": RAPIDAPI_HOST,
         "Content-Type": "application/json"
     }
-    
-    for chunk in chunks:
-        # Standardize prefixes for TV (assuming most are major US, TV handles raw tickers well in batch but safer to add NASDAQ/NYSE if known. 
-        # For simplicity in the batch, we will prefix common ones or just rely on TV's resolution if we send them as is).
-        # Actually, the batch API prefers EXCHANGE:TICKER format. 
-        # Since we don't have exchange info in the sheet easily, we'll try raw. If it fails, we fall back.
-        # Let's format them generically. RapidAPI usually handles raw tickers well on the quote endpoint.
-        
-        payload = {
-            "symbols": chunk,
-            "fields": "lp", # We only need the Last Price
-            "session": "regular"
-        }
-        
-        url = f"https://{RAPIDAPI_HOST}/api/quote/batch"
-        for attempt in range(3):
-            try:
-                response = requests.post(url, json=payload, headers=headers, timeout=10)
-                data = response.json()
-                if data.get("success"):
-                    results = data.get("data", {}).get("data", [])
-                    for res in results:
-                        if res.get("success"):
-                            # TV returns the symbol back like "NASDAQ:AAPL", we need to map it back
-                            symbol_resp = res.get("symbol", "")
-                            raw_ticker = symbol_resp.split(":")[-1] if ":" in symbol_resp else symbol_resp
-                            lp = res.get("data", {}).get("lp")
-                            if lp:
-                                prices[raw_ticker] = lp
-                    break
-            except Exception:
-                if attempt < 2:
-                    time.sleep(2)
-            
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(fetch_chunk, chunk, headers): chunk for chunk in chunks}
+        for future in as_completed(futures):
+            results = future.result()
+            for res in results:
+                if res.get("success"):
+                    symbol_resp = res.get("symbol", "")
+                    raw_ticker = symbol_resp.split(":")[-1] if ":" in symbol_resp else symbol_resp
+                    lp = res.get("data", {}).get("lp")
+                    if lp:
+                        prices[raw_ticker] = lp
     return prices
+
+def get_all_prices(symbols):
+    """Prefixes symbols using the exchange_cache.json, then fetches them in parallel chunks."""
+    cache = {}
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r") as f:
+                cache = json.load(f)
+        except Exception:
+            pass
+
+    prefixed_symbols = []
+    for s in symbols:
+        prefix = cache.get(s, "NASDAQ:")
+        prefixed_symbols.append(f"{prefix}{s}")
+        
+    return get_batch_prices_parallel(prefixed_symbols)
 
 def main():
     alert_state = load_and_clean_state()
@@ -117,9 +135,6 @@ def main():
     for row in data.get("values", [])[1:]:
         if len(row) >= 4 and row[0].strip():
             raw_ticker = row[0].strip()
-            
-            # Note: We no longer skip based on alert_state here because a stock 
-            # might have a warning alert but still need its snag alert evaluated.
             try:
                 entry = float(str(row[3]).replace("$", "").replace(",", ""))
                 if entry > 0:
@@ -131,18 +146,9 @@ def main():
         print("NO_REPLY")
         exit(0)
 
-    # 2. Fetch all live prices in bulk
+    # 2. Fetch all live prices in parallel with fallback resolution
     symbols_to_fetch = list(watchlist_targets.keys())
-    
-    # TV Batch API strictly requires Exchange:Symbol format (e.g., NASDAQ:AAPL) for reliable results.
-    # Since we don't store exchanges in our sheet, we will quickly map the major ones, and default to NASDAQ/NYSE.
-    # To keep it completely bulletproof and fast, we will append multiple common prefixes to the search block so TV definitely finds them.
-    # TV Batch will just return "failed" for the wrong prefixes and "success" for the right ones in the same chunk.
-    formatted_symbols = []
-    for t in symbols_to_fetch:
-        formatted_symbols.extend([f"NASDAQ:{t}", f"NYSE:{t}", f"AMEX:{t}", f"CRYPTO:{t}"])
-
-    live_prices = get_batch_prices(formatted_symbols)
+    live_prices = get_all_prices(symbols_to_fetch)
 
     # 3. Compare and trigger
     triggered = []
@@ -176,8 +182,8 @@ def main():
         save_state(alert_state)
 
     if triggered:
-        print("🚨 **MASTER SNAG SCANNER ALERT** 🚨\\nThe following Watchlist items have triggered an alert:\\n")
-        print("\\n".join(triggered))
+        print("🚨 **MASTER SNAG SCANNER ALERT** 🚨\nThe following Watchlist items have triggered an alert:\n")
+        print("\n".join(triggered))
     else:
         print("NO_REPLY")
 

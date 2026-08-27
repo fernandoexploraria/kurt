@@ -3,9 +3,11 @@ import subprocess
 import os
 import requests
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- CONFIGURATION ---
 STATE_FILE = "/root/.openclaw/workspace/memory/target_state.json"
+CACHE_FILE = "/root/.openclaw/workspace/memory/exchange_cache.json"
 TODAY = datetime.now().strftime("%Y-%m-%d")
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 RAPIDAPI_HOST = "tradingview-data1.p.rapidapi.com"
@@ -31,11 +33,34 @@ def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
 
-# --- BATCH PRICE FETCHING ---
-def get_batch_prices(symbols):
-    """Fetches real-time prices for a list of symbols in chunks of 10."""
+# --- PARALLEL BATCH PRICE FETCHING ---
+def fetch_chunk(chunk, headers):
+    payload = {
+        "symbols": chunk,
+        "fields": "lp",
+        "session": "regular"
+    }
+    url = f"https://{RAPIDAPI_HOST}/api/quote/batch"
+    import time
+    for attempt in range(3):
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("success"):
+                    return data.get("data", {}).get("data", [])
+        except Exception:
+            pass
+        if attempt < 2:
+            time.sleep(1)
+    return []
+
+def get_batch_prices_parallel(symbols):
+    """Fetches real-time prices for a list of symbols in chunks of 10 in parallel."""
     prices = {}
-    
+    if not symbols:
+        return prices
+
     chunk_size = 10
     chunks = [symbols[i:i + chunk_size] for i in range(0, len(symbols), chunk_size)]
     
@@ -44,31 +69,36 @@ def get_batch_prices(symbols):
         "x-rapidapi-host": RAPIDAPI_HOST,
         "Content-Type": "application/json"
     }
-    
-    for chunk in chunks:
-        payload = {
-            "symbols": chunk,
-            "fields": "lp", 
-            "session": "regular"
-        }
-        
-        url = f"https://{RAPIDAPI_HOST}/api/quote/batch"
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(fetch_chunk, chunk, headers): chunk for chunk in chunks}
+        for future in as_completed(futures):
+            results = future.result()
+            for res in results:
+                if res.get("success"):
+                    symbol_resp = res.get("symbol", "")
+                    raw_ticker = symbol_resp.split(":")[-1] if ":" in symbol_resp else symbol_resp
+                    lp = res.get("data", {}).get("lp")
+                    if lp:
+                        prices[raw_ticker] = lp
+    return prices
+
+def get_all_prices(symbols):
+    """Prefixes symbols using the exchange_cache.json, then fetches them in parallel chunks."""
+    cache = {}
+    if os.path.exists(CACHE_FILE):
         try:
-            response = requests.post(url, json=payload, headers=headers, timeout=10)
-            data = response.json()
-            if data.get("success"):
-                results = data.get("data", {}).get("data", [])
-                for res in results:
-                    if res.get("success"):
-                        symbol_resp = res.get("symbol", "")
-                        raw_ticker = symbol_resp.split(":")[-1] if ":" in symbol_resp else symbol_resp
-                        lp = res.get("data", {}).get("lp")
-                        if lp:
-                            prices[raw_ticker] = lp
+            with open(CACHE_FILE, "r") as f:
+                cache = json.load(f)
         except Exception:
             pass
-            
-    return prices
+
+    prefixed_symbols = []
+    for s in symbols:
+        prefix = cache.get(s, "NASDAQ:")
+        prefixed_symbols.append(f"{prefix}{s}")
+        
+    return get_batch_prices_parallel(prefixed_symbols)
 
 def main():
     env = os.environ.copy()
@@ -77,19 +107,28 @@ def main():
     alert_state = load_and_clean_state()
 
     # 2. Fetch live Positions from Google Sheets (A through K captures Ticker, Target Price, and Floor Price)
-    res = subprocess.run(
-        ["/usr/local/bin/gog", "sheets", "get", "1kjzfc6uEzBFtmNjlU1x3TVbHuWPgY7jnNce8mNTe66I", "Positions!A4:K50", "--json"], 
-        env=env, 
-        capture_output=True, text=True
-    )
+    res = None
+    data = None
+    
+    # Strictly use the main Simulator V3 sheet, protected by timeouts and no-input
+    for attempt in range(3):
+        try:
+            res = subprocess.run(
+                ["/usr/local/bin/gog", "sheets", "get", "1kjzfc6uEzBFtmNjlU1x3TVbHuWPgY7jnNce8mNTe66I", "Positions!A4:K50", "--json", "--no-input"], 
+                env=env, 
+                capture_output=True, text=True,
+                timeout=12
+            )
+            if res.returncode == 0:
+                data = json.loads(res.stdout)
+                break
+        except Exception:
+            pass
+            
+        if attempt < 2:
+            time.sleep(2)
 
-    if res.returncode != 0:
-        print("NO_REPLY")
-        exit(0)
-
-    try:
-        data = json.loads(res.stdout)
-    except Exception:
+    if not data:
         print("NO_REPLY")
         exit(0)
 
@@ -121,11 +160,7 @@ def main():
 
     # 4. Fetch all live prices in bulk
     symbols_to_fetch = list(position_targets.keys())
-    formatted_symbols = []
-    for t in symbols_to_fetch:
-        formatted_symbols.extend([f"NASDAQ:{t}", f"NYSE:{t}", f"AMEX:{t}", f"CRYPTO:{t}"])
-
-    live_prices = get_batch_prices(formatted_symbols)
+    live_prices = get_all_prices(symbols_to_fetch)
 
     # 5. Compare and trigger the Harvest Zones and Stop-Loss Floors
     triggered = []
