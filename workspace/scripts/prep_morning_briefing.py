@@ -22,16 +22,26 @@ def run_subprocess(cmd):
 def get_positions():
     print("Fetching Live Positions from Google Sheets...")
     # Fetching columns A through H to get Ticker, Current Price, and Target Price
-    cmd = f"GOG_ACCOUNT={ACCOUNT} gog sheets get {LIVE_SHEET_ID} 'Positions!A4:H50' --json"
+    cmd = f"GOG_ACCOUNT={ACCOUNT} gog sheets get {LIVE_SHEET_ID} 'Positions!A2:H50' --json"
     out = run_subprocess(cmd)
     if not out:
         print("Failed to fetch positions.")
-        return []
+        return [], 0.0
     
     data = json.loads(out)
     tickers = []
+    live_cash = 0.0
     for row in data.get('values', []):
-        if len(row) > 0 and row[0].strip() and row[0].strip().upper() not in ["CASH", "TICKER"]:
+        if len(row) > 0:
+            ticker_name = row[0].strip().upper()
+            if ticker_name == "CASH":
+                if len(row) > 4 and row[4].strip():
+                    try: live_cash = float(row[4].replace(',', ''))
+                    except: pass
+                continue
+            elif ticker_name == "TICKER" or not ticker_name:
+                continue
+
             current_price = 0.0
             target_price = 0.0
             total_value = 0.0
@@ -70,7 +80,7 @@ def get_positions():
     except Exception as e:
         print(f"Failed to cache top 5 tickers: {e}")
 
-    return tickers
+    return tickers, live_cash
 
 def get_ta_trend(ticker):
     """Determines basic momentum using MACD and Moving Averages with Smart Retry Loop."""
@@ -144,7 +154,7 @@ def get_quiver_flags(ticker):
 
 def main():
     print("Starting Morning Briefing Data Scout...")
-    tickers = get_positions()
+    tickers, live_cash = get_positions()
     if not tickers:
         print("No active positions found.")
         return
@@ -180,6 +190,7 @@ def main():
     print("\n=========================================")
     print("      MORNING BRIEFING SCOUT REPORT      ")
     print("=========================================\n")
+    print(f"💰 LIVE ACTIVE WALLET CASH: ${live_cash:,.2f}\n")
     
     # Print Harvest Zone
     print("🍎 THE HARVEST ZONE (<5% to Target):")

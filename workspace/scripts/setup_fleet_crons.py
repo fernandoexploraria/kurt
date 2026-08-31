@@ -71,7 +71,7 @@ CRONS = [
         "name": "Weekly Full Arsenal Audit",
         "expr": "0 4 * * 6",
         "tz": "America/Mexico_City",
-        "payload": "Run `python3 /root/.openclaw/workspace/batch_arsenal.py > /tmp/arsenal.log`. Then read the last few lines of the log to extract the Google Doc link. Reply to Telegram WITH ONLY THE GOOGLE DOC LINK and a short greeting. DO NOT print the raw contents of the report in the chat, because it will exceed Telegram's character limits and cause the delivery to fail.",
+        "payload": "Run `python3 /root/.openclaw/workspace/batch_arsenal.py > /tmp/arsenal.log`. Then read the last few lines of the log to extract the Google Doc link. Reply to Telegram WITH ONLY THE GOOGLE DOC LINK and a short greeting. DO NOT print the raw contents of the report in the chat, because it will exceed Telegram's character limits and cause the delivery to fail.\n\nCRITICAL COGNITIVE DIRECTIVE: Do not call any goal-tracking or goal-management tools (like update_goal or create_goal) during this run. Since this is an automated background cron session, there is no active user-facing goal, and calling these tools will cause the execution to crash.",
         "thinking": "low"
     }
 ]

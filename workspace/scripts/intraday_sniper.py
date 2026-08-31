@@ -99,7 +99,9 @@ def main():
             # 1. Check for new high-water mark
             if current_price > highest:
                 state["highest_seen_price"] = current_price
-                state["current_floor"] = round(current_price - drop, 2)
+                new_theoretical_floor = round(current_price - drop, 2)
+                if new_theoretical_floor > state.get("current_floor", 0.0):
+                    state["current_floor"] = new_theoretical_floor
                 state["last_updated"] = datetime.now().isoformat()
                 updated = True
             
