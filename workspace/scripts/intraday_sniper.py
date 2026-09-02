@@ -1,3 +1,4 @@
+import fcntl
 import json
 import os
 import sys
@@ -41,13 +42,53 @@ def main():
             except:
                 pass
 
+    # Load execution queue and history to reconcile active/completed trades
+    queue_data = {}
+    if os.path.exists("/root/.openclaw/workspace/memory/execution_queue.json"):
+        try:
+            with open("/root/.openclaw/workspace/memory/execution_queue.json", "r") as eq_f:
+                queue_data = json.load(eq_f)
+        except:
+            pass
+
+    history_data = {}
+    if os.path.exists("/root/.openclaw/workspace/memory/execution_history.json"):
+        try:
+            with open("/root/.openclaw/workspace/memory/execution_history.json", "r") as h_f:
+                history_data = json.load(h_f)
+        except:
+            pass
+
+    def is_trade_active_or_completed(t):
+        # Check if pending/processing in queue
+        for oid, o in queue_data.items():
+            if o.get("ticker") == t:
+                return True
+        # Check if completed/failed in history (looking for today's transactions)
+        for oid, o in history_data.items():
+            if o.get("ticker") == t and o.get("action") == "SELL" and "2026-09-01" in o.get("timestamp", ""):
+                return True
+        return False
+
     symbols_to_query = []
-    for ticker, state in radar.items():
+    updated_radar_pre = False
+    
+    for ticker, state in list(radar.items()):
         if state.get("status") == "breached":
-            continue  # Already alerted, don't spam the user
+            if is_trade_active_or_completed(ticker):
+                continue  # Already alerted and active/completed, don't spam
+            else:
+                # Reconciliation trigger! Force re-arm because the trade is missing from queue/history.
+                state.pop("status", None)
+                state["last_updated"] = datetime.now().isoformat()
+                updated_radar_pre = True
         
         prefix = cache.get(ticker, "NASDAQ:") 
         symbols_to_query.append(f"{prefix}{ticker}")
+
+    if updated_radar_pre:
+        with open(RADAR_FILE, 'w') as f:
+            json.dump(radar, f, indent=2)
 
     if not symbols_to_query:
         print("NO_REPLY")
@@ -114,27 +155,35 @@ def main():
                     updated = True
                     continue
 
-                # Log to execution queue
+                # Log to execution queue using exclusive file locking
+                import fcntl
                 import time
                 from datetime import datetime
-                try:
-                    with open("/root/.openclaw/workspace/memory/execution_queue.json", "r") as eq_f:
-                        exec_queue = json.load(eq_f)
-                except:
-                    exec_queue = {}
                 
-                order_id = f"auto_{int(time.time())}_{ticker}"
-                exec_queue[order_id] = {
-                    "timestamp": datetime.now().isoformat(),
-                    "action": "SELL",
-                    "order_type": "TRAILING_STOP",
-                    "ticker": ticker,
-                    "shares": state.get("shares", 1), # Default to 1 if not specified in radar
-                    "execution_price": current_price,
-                    "source": "1-Minute Intraday Trailing Sniper",
-                    "status": "pending"
-                }
-                with open("/root/.openclaw/workspace/memory/execution_queue.json", "w") as eq_f:
+                os.makedirs(os.path.dirname("/root/.openclaw/workspace/memory/execution_queue.json"), exist_ok=True)
+                with open("/root/.openclaw/workspace/memory/execution_queue.json", "a+") as eq_f:
+                    fcntl.flock(eq_f, fcntl.LOCK_EX)
+                    eq_f.seek(0)
+                    try:
+                        content = eq_f.read()
+                        exec_queue = json.loads(content) if content.strip() else {}
+                    except:
+                        exec_queue = {}
+                    
+                    order_id = f"auto_{int(time.time())}_{ticker}"
+                    exec_queue[order_id] = {
+                        "timestamp": datetime.now().isoformat(),
+                        "action": "SELL",
+                        "order_type": "TRAILING_STOP",
+                        "ticker": ticker,
+                        "shares": state.get("shares", 1), # Default to 1 if not specified in radar
+                        "execution_price": current_price,
+                        "source": "1-Minute Intraday Trailing Sniper",
+                        "status": "pending"
+                    }
+                    
+                    eq_f.seek(0)
+                    eq_f.truncate()
                     json.dump(exec_queue, eq_f, indent=2)
                 
                 state["status"] = "breached"

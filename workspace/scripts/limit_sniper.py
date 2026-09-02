@@ -1,3 +1,4 @@
+import fcntl
 import json
 import os
 import requests
@@ -152,25 +153,30 @@ def main():
                     
                     with open("/root/.openclaw/workspace/memory/sniper_alerts.log", "a") as logf: logf.write(log_msg)
                     
-                    try:
-                        with open("/root/.openclaw/workspace/memory/execution_queue.json", "r") as eq_f:
-                            exec_queue = json.load(eq_f)
-                    except:
-                        exec_queue = {}
-                    
                     os.makedirs(os.path.dirname("/root/.openclaw/workspace/memory/execution_queue.json"), exist_ok=True)
-                    order_id = f"auto_{int(time.time())}_{ticker}"
-                    exec_queue[order_id] = {
-                        "timestamp": datetime.now().isoformat(),
-                        "action": "SELL" if action in ["SELL", "STOP_LOSS"] else "BUY",
-                        "order_type": "STOP_LOSS" if action == "STOP_LOSS" else order_type,
-                        "ticker": ticker,
-                        "shares": order.get("shares", 1), # Default to 1 if not specified
-                        "execution_price": current_price,
-                        "source": "1-Minute Limit Sniper",
-                        "status": "pending"
-                    }
-                    with open("/root/.openclaw/workspace/memory/execution_queue.json", "w") as eq_f:
+                    with open("/root/.openclaw/workspace/memory/execution_queue.json", "a+") as eq_f:
+                        fcntl.flock(eq_f, fcntl.LOCK_EX)
+                        eq_f.seek(0)
+                        try:
+                            content = eq_f.read()
+                            exec_queue = json.loads(content) if content.strip() else {}
+                        except:
+                            exec_queue = {}
+                        
+                        order_id = f"auto_{int(time.time())}_{ticker}"
+                        exec_queue[order_id] = {
+                            "timestamp": datetime.now().isoformat(),
+                            "action": "SELL" if action in ["SELL", "STOP_LOSS"] else "BUY",
+                            "order_type": "STOP_LOSS" if action == "STOP_LOSS" else order_type,
+                            "ticker": ticker,
+                            "shares": order.get("shares", 1), # Default to 1 if not specified
+                            "execution_price": current_price,
+                            "source": "1-Minute Limit Sniper",
+                            "status": "pending"
+                        }
+                        
+                        eq_f.seek(0)
+                        eq_f.truncate()
                         json.dump(exec_queue, eq_f, indent=2)
                     
                     order["status"] = "triggered"

@@ -154,14 +154,23 @@ def sync_stop_traps(new_radar):
 
         if ticker in new_radar:
             new_floor = new_radar[ticker]["current_floor"]
+            new_shares = new_radar[ticker]["shares"]
             if status == "suspended":
                 print(f"  [Re-arm] {ticker} STOP_LOSS (position active again).")
                 data["status"] = "waiting"
                 data.pop("suspend_reason", None)
                 updated = True
-            if data.get("target_price") != new_floor:
-                print(f"  [Sync] {ticker} STOP_LOSS: ${data.get('target_price')} -> ${new_floor}")
-                data["target_price"] = new_floor
+                
+            price_changed = data.get("target_price") != new_floor
+            shares_changed = data.get("shares") != new_shares
+            
+            if price_changed or shares_changed:
+                if price_changed:
+                    print(f"  [Sync] Updating {ticker} STOP_LOSS price: ${data.get('target_price')} -> ${new_floor}")
+                    data["target_price"] = new_floor
+                if shares_changed:
+                    print(f"  [Sync] Updating {ticker} STOP_LOSS shares: {data.get('shares')} -> {new_shares}")
+                    data["shares"] = new_shares
                 updated = True
         else:
             if status == "waiting":

@@ -78,6 +78,10 @@ def get_positions():
         if len(row) > 0 and row[0].strip() and row[0].strip().upper() not in ["CASH", "TICKER"]:
             price = 0.0
             current_floor = 0.0
+            shares = 0.0
+            if len(row) > 1 and row[1].strip():
+                try: shares = float(str(row[1]).replace(',', ''))
+                except: pass
             if len(row) > 3 and row[3].strip():
                 try: price = float(str(row[3]).replace(',', '').replace('$', ''))
                 except: pass
@@ -88,7 +92,8 @@ def get_positions():
                 "row": i + 4, 
                 "ticker": row[0].strip(),
                 "price": price,
-                "floor": current_floor
+                "floor": current_floor,
+                "shares": shares
             })
     return tickers
 
@@ -216,15 +221,23 @@ def sync_pending_orders(results):
     updated = False
     print("\n=== SYNCHRONIZING TAKE-PROFIT (SELL) TRAPS ===")
     target_lookup = {r['ticker']: r['target'] for r in results}
+    shares_lookup = {r['ticker']: r['shares'] for r in results}
 
     for ticker, data in orders.items():
         if (data.get("status") == "waiting" and data.get("action") == "SELL"
                 and ticker in target_lookup):
             old_price = data.get("target_price")
             new_price = target_lookup[ticker]
-            if old_price != new_price:
-                print(f"  [Sync] Updating {ticker} TAKE_PROFIT Trap: ${old_price} -> ${new_price}")
-                data["target_price"] = new_price
+            old_shares = data.get("shares")
+            new_shares = shares_lookup[ticker]
+            
+            if old_price != new_price or old_shares != new_shares:
+                if old_price != new_price:
+                    print(f"  [Sync] Updating {ticker} TAKE_PROFIT price: ${old_price} -> ${new_price}")
+                    data["target_price"] = new_price
+                if old_shares != new_shares:
+                    print(f"  [Sync] Updating {ticker} TAKE_PROFIT shares: {old_shares} -> {new_shares}")
+                    data["shares"] = new_shares
                 updated = True
 
     if updated:
@@ -254,7 +267,7 @@ def main():
     results = []
 
     for item in tickers:
-        ticker, row, current_price, current_floor = item['ticker'], item['row'], item['price'], item['floor']
+        ticker, row, current_price, current_floor, shares = item['ticker'], item['row'], item['price'], item['floor'], item['shares']
         print(f"\n--- {ticker} ---")
         
         # 1. Calculate fresh ATR on the fly
@@ -306,7 +319,7 @@ def main():
         update_sheet(row, target_price, final_floor, atr)
         
         pct_to_target = ((target_price - current_price) / current_price) * 100 if current_price > 0 else 999
-        results.append({"ticker": ticker, "target": target_price, "floor": final_floor, "pct": pct_to_target})
+        results.append({"ticker": ticker, "target": target_price, "floor": final_floor, "pct": pct_to_target, "shares": shares})
 
     print("\n=== SUMMARY (HARVEST & FLOORS) ===")
     results.sort(key=lambda x: x['pct'])

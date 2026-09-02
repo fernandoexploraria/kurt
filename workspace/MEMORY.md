@@ -115,6 +115,8 @@ SBUX Immediate Entry Alpha (2026-08-04): Replay simulation proved that trying to
 
 Schwab Refresh Day Shift (2026-08-11): Re-authenticated Schwab APIs on Tuesday, August 11th, proactively resetting our 7-day token rotation lifecycle. This establishes Tuesdays as our new weekly target day for re-authentication (the automated 6.0-day warning will fire on Monday evenings to prevent OOO or midweek gaps).
 
+File-System Race Condition Resolved (2026-09-01): Standardized cooperative Unix file locking (`fcntl`) across all four queue-touching scripts (`intraday_sniper.py`, `limit_sniper.py`, `process_executions.py`, and `inject_immediate.py`) using an atomic `a+` read-lock-seek-write-truncate pattern to completely eliminate concurrent write-collisions on `execution_queue.json`. Deployed a smart "State Reconciliation Check" inside `intraday_sniper.py` that auto-heals and re-queues any position marked "breached" on the radar if its execution transaction is ever missing or clobbered.
+
 🏰 Saturday Maintenance Log: Update to 2026.5.20 (2026-05-23)
 Upgrade Success: The system was successfully upgraded to version 2026.5.20.
 

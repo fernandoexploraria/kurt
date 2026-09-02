@@ -1,3 +1,4 @@
+import fcntl
 import json
 import os
 import sys
@@ -196,38 +197,37 @@ def process_sell(order_id, order):
     return True
 
 def main():
-    if not os.path.exists(QUEUE_FILE):
-        print("NO_REPLY")
-        return
-
-    with open(QUEUE_FILE, 'r') as f:
+    locked_orders = []
+    
+    # Phase 1: Pre-Flight Lock using exclusive flock
+    with open(QUEUE_FILE, "a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0)
         try:
-            queue = json.load(f)
+            content = f.read()
+            queue = json.loads(content) if content.strip() else {}
         except:
+            queue = {}
+
+        if not queue:
             print("NO_REPLY")
             return
 
-    if not queue:
-        print("NO_REPLY")
-        return
+        needs_save = False
+        for order_id, order in queue.items():
+            if order.get("status") == "pending":
+                order["status"] = "processing"
+                locked_orders.append(order_id)
+                needs_save = True
 
-    # Phase 1: Pre-Flight Lock
-    locked_orders = []
-    needs_save = False
-    
-    for order_id, order in queue.items():
-        if order.get("status") == "pending":
-            order["status"] = "processing"
-            locked_orders.append(order_id)
-            needs_save = True
+        if not locked_orders:
+            # Queue contains no pending orders
+            print("NO_REPLY")
+            return
 
-    if not locked_orders:
-        # Queue is empty or only contains failed/stuck processing orders
-        print("NO_REPLY")
-        return
-
-    if needs_save:
-        with open(QUEUE_FILE, 'w') as f:
+        if needs_save:
+            f.seek(0)
+            f.truncate()
             json.dump(queue, f, indent=2)
             
     print(f"Locked {len(locked_orders)} orders for processing. Pre-flight lock engaged.")
@@ -262,15 +262,31 @@ def main():
             order["status"] = "failed"
             # We don't remove failed orders, they stay in queue for manual audit
 
-    # Phase 3: Queue Cleanup (Post-Flight)
-    if orders_to_remove or any(o.get("status") == "failed" for o in queue.values()):
-        for oid in orders_to_remove:
-            del queue[oid]
+    # Phase 3: Queue Cleanup (Post-Flight) with Lock and Re-read to protect concurrent orders
+    if locked_orders:
+        with open(QUEUE_FILE, "a+") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.seek(0)
+            try:
+                content = f.read()
+                current_queue = json.loads(content) if content.strip() else {}
+            except:
+                current_queue = {}
+
+            # Remove completed orders and mark failed ones
+            for oid in orders_to_remove:
+                if oid in current_queue:
+                    del current_queue[oid]
+                    
+            for oid in locked_orders:
+                if oid not in orders_to_remove and oid in current_queue:
+                    current_queue[oid]["status"] = "failed"
+
+            f.seek(0)
+            f.truncate()
+            json.dump(current_queue, f, indent=2)
             
-        with open(QUEUE_FILE, 'w') as f:
-            json.dump(queue, f, indent=2)
-            
-        with open(HISTORY_FILE, 'w') as f:
+        with open(HISTORY_FILE, "w") as f:
             json.dump(history, f, indent=2)
 
 if __name__ == "__main__":
